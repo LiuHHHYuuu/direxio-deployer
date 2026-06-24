@@ -43,8 +43,9 @@ Step-by-step onboarding flow:
 1. **AWS account.**
    - Ask: "Do you already have an AWS account you can log into?"
    - If yes, continue to the access key step.
-   - If no, ask the user to open `https://aws.amazon.com/` and register in their
-     browser, then stop until they say the account is ready.
+   - If no, ask the user to open
+     `https://signin.aws.amazon.com/signup?request_type=register` and register
+     in their browser, then stop until they say the account is ready.
    - Do not explain AWS resource details at this stage unless asked.
    - Never ask for, collect, paste, log, or store payment card details, root
      password, MFA code, email verification code, or phone verification code.
