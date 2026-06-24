@@ -1,0 +1,38 @@
+#cloud-config
+# user-data.yaml - runs once on first EC2 boot as cloud-init user-data.
+#
+# Flow: install Docker -> write deployment files -> generate local secrets ->
+# docker compose up -> wait for message-server bootstrap credentials.
+
+package_update: true
+package_upgrade: false
+
+write_files:
+  - path: /opt/p2p/.env
+    permissions: '0600'
+    content: |
+      DOMAIN=__DOMAIN__
+      ACME_EMAIL=__ACME_EMAIL__
+      MESSAGE_SERVER_IMAGE=__MESSAGE_SERVER_IMAGE__
+
+runcmd:
+  - |
+    TOK=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
+          -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+    IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOK" \
+           http://169.254.169.254/latest/meta-data/public-ipv4)
+    [ -n "$IP" ] || IP=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me)
+    grep -q '^PUBLIC_IP=' /opt/p2p/.env || echo "PUBLIC_IP=$IP" >> /opt/p2p/.env
+    grep -q '^TURN_SECRET=' /opt/p2p/.env || \
+      echo "TURN_SECRET=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 40)" >> /opt/p2p/.env
+  - export DOMAIN=$(grep '^DOMAIN=' /opt/p2p/.env | cut -d= -f2)
+  - curl -fsSL https://get.docker.com | sh
+  - systemctl enable --now docker
+  - mkdir -p /opt/p2p/wellknown
+  - chmod 700 /opt/p2p
+  - |
+    set -e
+    cd /opt/p2p
+    docker compose --env-file .env up -d
+    DOMAIN=$(grep '^DOMAIN=' .env | cut -d= -f2) bash init-tokens.sh
+    touch /opt/p2p/.deploy-done

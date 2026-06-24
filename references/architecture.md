@@ -1,0 +1,42 @@
+# 架构原理
+
+本部署器已经适配新版 Direxio message-server: AS 业务合并进 Dendrite 单体后端，不再部署独立 `asd` 服务。
+
+## 服务拓扑
+
+```text
+公网 443/80 -> Caddy
+  ├─ /_matrix/*, /_dendrite/*, /_synapse/* -> message-server:8008
+  ├─ /_p2p/*                              -> message-server:8008
+  ├─ /.well-known/matrix/*                -> Caddy 静态响应
+  ├─ /.well-known/portal/*                -> /opt/p2p/wellknown 静态文件
+  └─ /healthz                             -> /_p2p/health
+
+message-server -> PostgreSQL 18
+coturn         -> TURN 3478 + 49160-49200/udp
+```
+
+- **message-server**: `direxio/message-server:latest`，同时承载 Matrix homeserver 和 `/_p2p/query`/`/_p2p/command`。
+- **PostgreSQL 18**: Matrix 与 P2P 业务表共库持久化，compose 使用 `/var/lib/postgresql`。
+- **Caddy**: 唯一 HTTP/TLS 入口，自动签发 Let's Encrypt。
+- **coturn**: WebRTC TURN relay，Direxio message-server 通过 shared-secret 动态签发 TURN 凭证。
+
+## 启动顺序
+
+1. `postgres` healthy。
+2. `message-init` 生成 `/etc/direxio-message-server/message-server.yaml` 和 signing key，并写入 TURN 配置。
+3. `message-server` 启动，加载 Matrix + P2P 业务，写 `/var/direxio-message-server/p2p/bootstrap.json`。
+4. `init-tokens.sh` 从容器复制完整凭据到宿主 `/opt/p2p/bootstrap.json`，并生成 `/opt/p2p/wellknown/owner.json`。
+5. `caddy` 对外服务 Matrix、P2P API 和 well-known。
+
+## 凭据模型
+
+`/opt/p2p/bootstrap.json` 会包含:
+
+- `password`: 前端 IM 登录密码。
+- `access_token`: 当前用户的统一 bearer token，可用于 Matrix `/_matrix/client/*` 和需要用户身份的 P2P 调用。
+- `agent_token`: agent/MCP 调用 `/_p2p/*` 的 bearer token。
+
+## 域名模型
+
+Matrix `server_name` 必须是长期真实域名。部署后更换 `DOMAIN` 等同创建新的 homeserver 身份，不要保留旧 PostgreSQL/message-server 数据卷后直接改域名。
