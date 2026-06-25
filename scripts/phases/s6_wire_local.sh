@@ -60,7 +60,13 @@ _detect_agent_runtime() {
 _active_agent_runtime() {
   local runtime
   for runtime in codex claude-code gemini cursor copilot openclaw hermes; do
-    if _runtime_has_active_signal "$runtime"; then
+    if _runtime_has_env_signal "$runtime"; then
+      printf '%s\n' "$runtime"
+      return 0
+    fi
+  done
+  for runtime in codex claude-code gemini cursor copilot openclaw hermes; do
+    if _runtime_has_context_signal "$runtime"; then
       printf '%s\n' "$runtime"
       return 0
     fi
@@ -69,51 +75,76 @@ _active_agent_runtime() {
 }
 
 _runtime_has_active_signal() {
+  _runtime_has_env_signal "$1" || _runtime_has_context_signal "$1"
+}
+
+_runtime_has_env_signal() {
   local runtime=$1
   case "$runtime" in
     codex)
-      _env_name_matches '^CODEX_' ||
-        _active_text_contains '/.codex/tmp/' ||
+      _env_name_matches '^CODEX_'
+      ;;
+    claude-code)
+      _env_name_matches '^(CLAUDECODE|CLAUDECODE_|CLAUDE_CODE_)'
+      ;;
+    gemini)
+      _env_name_matches '^(GEMINI_CLI|GEMINI_CLI_|GEMINI_AGENT_|GOOGLE_GEMINI_CLI_)'
+      ;;
+    cursor)
+      _env_name_matches '^CURSOR_'
+      ;;
+    copilot)
+      _env_name_matches '^(COPILOT_|GITHUB_COPILOT_)'
+      ;;
+    openclaw)
+      _env_name_matches '^OPENCLAW_'
+      ;;
+    hermes)
+      _env_name_matches '^HERMES_'
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+_runtime_has_context_signal() {
+  local runtime=$1
+  case "$runtime" in
+    codex)
+      _active_text_contains '/.codex/tmp/' ||
         _active_text_contains 'openai/codex' ||
         _active_text_contains 'openai.codex' ||
         _active_text_contains '/.codex/' ||
         _process_name_matches 'codex'
       ;;
     claude-code)
-      _env_name_matches '^(CLAUDECODE|CLAUDECODE_|CLAUDE_CODE_)' ||
-        _active_text_contains '/.claude/tmp/' ||
+      _active_text_contains '/.claude/tmp/' ||
         _active_text_contains '/.claude/' ||
         _active_text_contains 'claude-code' ||
         _process_name_matches 'claude'
       ;;
     gemini)
-      _env_name_matches '^(GEMINI_CLI|GEMINI_CLI_|GEMINI_AGENT_|GOOGLE_GEMINI_CLI_)' ||
-        _active_text_contains '/.gemini/tmp/' ||
+      _active_text_contains '/.gemini/tmp/' ||
         _active_text_contains '/.gemini/' ||
         _process_name_matches 'gemini'
       ;;
     cursor)
-      _env_name_matches '^CURSOR_' ||
-        _active_text_contains '/.cursor/tmp/' ||
+      _active_text_contains '/.cursor/tmp/' ||
         _active_text_contains '/.cursor/' ||
         _active_text_contains 'cursor' ||
         _process_name_matches 'cursor'
       ;;
     copilot)
-      _env_name_matches '^(COPILOT_|GITHUB_COPILOT_)' ||
-        _active_text_contains '/.github/copilot/' ||
+      _active_text_contains '/.github/copilot/' ||
         _active_text_contains '/.copilot/' ||
         _process_name_matches 'copilot'
       ;;
     openclaw)
-      _env_name_matches '^OPENCLAW_' ||
-        _active_text_contains '/.openclaw/tmp/' ||
+      _active_text_contains '/.openclaw/tmp/' ||
         _active_text_contains '/.openclaw/' ||
         _process_name_matches 'openclaw'
       ;;
     hermes)
-      _env_name_matches '^HERMES_' ||
-        _active_text_contains '/.hermes/tmp/' ||
+      _active_text_contains '/.hermes/tmp/' ||
         _active_text_contains '/.hermes/' ||
         _process_name_matches 'hermes'
       ;;
@@ -136,6 +167,7 @@ _active_text_contains() {
 
 _process_name_matches() {
   local needle=$1
+  [ "${DIREXIO_AGENT_DETECT_PROCESS:-1}" != "0" ] || return 1
   _process_tree_names | tr '[:upper:]' '[:lower:]' | grep -Eq "(^|[^a-z0-9])${needle}([^a-z0-9]|$)"
 }
 

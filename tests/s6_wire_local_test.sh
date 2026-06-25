@@ -12,6 +12,22 @@ mkdir -p "$HOME"
 # shellcheck disable=SC1090
 source "$ROOT/scripts/phases/s6_wire_local.sh"
 
+clear_runtime_env() {
+  local env_name
+  while IFS='=' read -r env_name _; do
+    case "$env_name" in
+      CODEX_*|CLAUDECODE|CLAUDECODE_*|CLAUDE_CODE_*|GEMINI_CLI|GEMINI_CLI_*|GEMINI_AGENT_*|GOOGLE_GEMINI_CLI_*|CURSOR_*|COPILOT_*|GITHUB_COPILOT_*|OPENCLAW_*|HERMES_*)
+        unset "$env_name"
+        ;;
+    esac
+  done < <(env)
+  unset HERMES_HOME CODEX_HOME CLAUDE_HOME GEMINI_HOME CURSOR_HOME COPILOT_HOME OPENCLAW_HOME
+  unset HERMES_SESSION CODEX_SANDBOX CLAUDECODE GEMINI_CLI CURSOR_TRACE_ID GITHUB_COPILOT_TOKEN OPENCLAW_SESSION
+}
+
+clear_runtime_env
+export DIREXIO_AGENT_DETECT_PROCESS=0
+
 unset DIREXIO_HOME
 [ "$(_direxio_home)" = "$HOME/.direxio" ]
 [ "$(DIREXIO_HOME="$tmp/custom-direxio" _direxio_home)" = "$tmp/custom-direxio" ]
@@ -43,8 +59,7 @@ assert_active_runtime() {
   local expected=$1 signal=$2
   shift 2
   (
-    unset HERMES_HOME CODEX_HOME CLAUDE_HOME GEMINI_HOME CURSOR_HOME COPILOT_HOME OPENCLAW_HOME
-    unset HERMES_SESSION CODEX_SANDBOX CLAUDECODE GEMINI_CLI CURSOR_TRACE_ID GITHUB_COPILOT_TOKEN OPENCLAW_SESSION
+    clear_runtime_env
     mkdir -p "$HOME/.hermes" "$HOME/.codex" "$HOME/.claude" "$HOME/.gemini" "$HOME/.cursor" "$HOME/.copilot" "$HOME/.openclaw" "$tmp/neutral"
     cd "$tmp/neutral"
     PATH="/usr/bin:/bin"
@@ -69,8 +84,7 @@ assert_active_runtime openclaw OPENCLAW_SESSION OPENCLAW_SESSION=1
 assert_active_runtime hermes HERMES_SESSION HERMES_SESSION=1
 assert_active_runtime codex .codex/tmp PATH="/tmp/.codex/tmp/codex-arg123:/usr/bin:/bin"
 (
-  unset HERMES_HOME CODEX_HOME CLAUDE_HOME GEMINI_HOME CURSOR_HOME COPILOT_HOME OPENCLAW_HOME
-  unset HERMES_SESSION CODEX_SANDBOX CLAUDECODE GEMINI_CLI CURSOR_TRACE_ID GITHUB_COPILOT_TOKEN OPENCLAW_SESSION
+  clear_runtime_env
   mkdir -p "$HOME/.hermes" "$HOME/.codex" "$HOME/.claude" "$HOME/.gemini" "$HOME/.cursor" "$HOME/.copilot" "$HOME/.openclaw" "$tmp/neutral"
   cd "$tmp/neutral"
   PATH="/usr/bin:/bin"
