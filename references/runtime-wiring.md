@@ -116,6 +116,11 @@ domain.
 Defaults:
 
 - `DIREXIO_AGENT_PLATFORM=auto` detects Codex, Claude Code, Gemini, Cursor, Copilot, OpenClaw, Hermes, or falls back to `unknown`.
+- Active runtime signals are evaluated before historical config directories:
+  runtime-specific process environment markers, current `PATH`/`PWD`
+  fingerprints, and current process names win over stale `~/.codex`,
+  `~/.hermes`, `~/.claude`, and similar directories. Generic API key variables
+  such as model-provider credentials are not treated as active runtime markers.
 - `DIREXIO_AGENT_INSTALL=recommend` prints and records the command only.
 - `DIREXIO_AGENT_INSTALL=auto` runs `npx -y -p @direxio/agent-plugins@latest direxio-agent-install --platform <runtime> --mode <mode> --node-id <agent_node_id> --workspace <agent_workspace> --credentials-file ~/.direxio/nodes/<service_id>/credentials.json --write`.
 - `DIREXIO_AGENT_INSTALL_MODE=recommended` maps OpenClaw/Hermes to `native`, Codex/generic to `gateway`, and non-long-process platforms to `mcp`.

@@ -39,9 +39,44 @@ fi
 
 [ "$(DIREXIO_AGENT_PLATFORM=hermes _detect_agent_runtime)" = "hermes" ]
 [ "$(DIREXIO_AGENT_PLATFORM=openclaw _detect_agent_runtime)" = "openclaw" ]
-mkdir -p "$HOME/.hermes" "$HOME/.codex"
-[ "$(PATH="/tmp/.codex/tmp/codex-arg123:$PATH" _detect_agent_runtime)" = "codex" ]
-rm -rf "$HOME/.hermes" "$HOME/.codex"
+assert_active_runtime() {
+  local expected=$1 signal=$2
+  shift 2
+  (
+    unset HERMES_HOME CODEX_HOME CLAUDE_HOME GEMINI_HOME CURSOR_HOME COPILOT_HOME OPENCLAW_HOME
+    unset HERMES_SESSION CODEX_SANDBOX CLAUDECODE GEMINI_CLI CURSOR_TRACE_ID GITHUB_COPILOT_TOKEN OPENCLAW_SESSION
+    mkdir -p "$HOME/.hermes" "$HOME/.codex" "$HOME/.claude" "$HOME/.gemini" "$HOME/.cursor" "$HOME/.copilot" "$HOME/.openclaw" "$tmp/neutral"
+    cd "$tmp/neutral"
+    PATH="/usr/bin:/bin"
+    local kv
+    for kv in "$@"; do
+      export "$kv"
+    done
+    actual=$(_detect_agent_runtime)
+    if [ "$actual" != "$expected" ]; then
+      echo "expected active $expected runtime from $signal, got $actual" >&2
+      exit 1
+    fi
+  )
+}
+
+assert_active_runtime codex CODEX_SANDBOX CODEX_SANDBOX=1
+assert_active_runtime claude-code CLAUDECODE CLAUDECODE=1
+assert_active_runtime gemini GEMINI_CLI GEMINI_CLI=1
+assert_active_runtime cursor CURSOR_TRACE_ID CURSOR_TRACE_ID=1
+assert_active_runtime copilot GITHUB_COPILOT_TOKEN GITHUB_COPILOT_TOKEN=1
+assert_active_runtime openclaw OPENCLAW_SESSION OPENCLAW_SESSION=1
+assert_active_runtime hermes HERMES_SESSION HERMES_SESSION=1
+assert_active_runtime codex .codex/tmp PATH="/tmp/.codex/tmp/codex-arg123:/usr/bin:/bin"
+(
+  unset HERMES_HOME CODEX_HOME CLAUDE_HOME GEMINI_HOME CURSOR_HOME COPILOT_HOME OPENCLAW_HOME
+  unset HERMES_SESSION CODEX_SANDBOX CLAUDECODE GEMINI_CLI CURSOR_TRACE_ID GITHUB_COPILOT_TOKEN OPENCLAW_SESSION
+  mkdir -p "$HOME/.hermes" "$HOME/.codex" "$HOME/.claude" "$HOME/.gemini" "$HOME/.cursor" "$HOME/.copilot" "$HOME/.openclaw" "$tmp/neutral"
+  cd "$tmp/neutral"
+  PATH="/usr/bin:/bin"
+  export CLAUDE_API_KEY=test GEMINI_API_KEY=test
+  [ "$(_detect_agent_runtime)" = "hermes" ]
+)
 [ "$(DIREXIO_AGENT_INSTALL=skip _agent_install_policy)" = "skip" ]
 [ "$(DIREXIO_AGENT_INSTALL=recommend _agent_install_policy)" = "recommend" ]
 [ "$(DIREXIO_AGENT_INSTALL=auto _agent_install_policy)" = "auto" ]

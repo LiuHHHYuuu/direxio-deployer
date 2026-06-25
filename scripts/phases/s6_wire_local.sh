@@ -29,6 +29,7 @@ _direxio_service_dir() {
 }
 
 _detect_agent_runtime() {
+  local active_runtime
   if [ -n "${DIREXIO_AGENT_PLATFORM:-}" ] && [ "${DIREXIO_AGENT_PLATFORM:-}" != "auto" ]; then
     _validate_agent_platform "$DIREXIO_AGENT_PLATFORM"
     printf '%s\n' "$DIREXIO_AGENT_PLATFORM"
@@ -36,7 +37,8 @@ _detect_agent_runtime() {
   fi
   # Active-process signals are stronger than stale config directories from
   # other agents that have used this WSL home before.
-  if _is_codex_runtime; then printf 'codex\n'; return 0; fi
+  active_runtime=$(_active_agent_runtime)
+  if [ -n "$active_runtime" ]; then printf '%s\n' "$active_runtime"; return 0; fi
   if [ -n "${HERMES_HOME:-}" ]; then printf 'hermes\n'; return 0; fi
   if [ -n "${CODEX_HOME:-}" ]; then printf 'codex\n'; return 0; fi
   if [ -n "${CLAUDE_HOME:-}" ]; then printf 'claude-code\n'; return 0; fi
@@ -55,12 +57,97 @@ _detect_agent_runtime() {
   printf 'unknown\n'
 }
 
-_is_codex_runtime() {
-  env | grep -Eq '^CODEX_' && return 0
-  case "${PATH:-}:${PWD:-}" in
-    *"/.codex/tmp/"*|*"OpenAI/Codex"*|*"OpenAI.Codex"*|*"/.codex/"*) return 0 ;;
+_active_agent_runtime() {
+  local runtime
+  for runtime in codex claude-code gemini cursor copilot openclaw hermes; do
+    if _runtime_has_active_signal "$runtime"; then
+      printf '%s\n' "$runtime"
+      return 0
+    fi
+  done
+  return 0
+}
+
+_runtime_has_active_signal() {
+  local runtime=$1
+  case "$runtime" in
+    codex)
+      _env_name_matches '^CODEX_' ||
+        _active_text_contains '/.codex/tmp/' ||
+        _active_text_contains 'openai/codex' ||
+        _active_text_contains 'openai.codex' ||
+        _active_text_contains '/.codex/' ||
+        _process_name_matches 'codex'
+      ;;
+    claude-code)
+      _env_name_matches '^(CLAUDECODE|CLAUDECODE_|CLAUDE_CODE_)' ||
+        _active_text_contains '/.claude/tmp/' ||
+        _active_text_contains '/.claude/' ||
+        _active_text_contains 'claude-code' ||
+        _process_name_matches 'claude'
+      ;;
+    gemini)
+      _env_name_matches '^(GEMINI_CLI|GEMINI_CLI_|GEMINI_AGENT_|GOOGLE_GEMINI_CLI_)' ||
+        _active_text_contains '/.gemini/tmp/' ||
+        _active_text_contains '/.gemini/' ||
+        _process_name_matches 'gemini'
+      ;;
+    cursor)
+      _env_name_matches '^CURSOR_' ||
+        _active_text_contains '/.cursor/tmp/' ||
+        _active_text_contains '/.cursor/' ||
+        _active_text_contains 'cursor' ||
+        _process_name_matches 'cursor'
+      ;;
+    copilot)
+      _env_name_matches '^(COPILOT_|GITHUB_COPILOT_)' ||
+        _active_text_contains '/.github/copilot/' ||
+        _active_text_contains '/.copilot/' ||
+        _process_name_matches 'copilot'
+      ;;
+    openclaw)
+      _env_name_matches '^OPENCLAW_' ||
+        _active_text_contains '/.openclaw/tmp/' ||
+        _active_text_contains '/.openclaw/' ||
+        _process_name_matches 'openclaw'
+      ;;
+    hermes)
+      _env_name_matches '^HERMES_' ||
+        _active_text_contains '/.hermes/tmp/' ||
+        _active_text_contains '/.hermes/' ||
+        _process_name_matches 'hermes'
+      ;;
+    *) return 1 ;;
   esac
-  return 1
+}
+
+_env_name_matches() {
+  env | sed -E 's/=.*$//' | grep -Eq "$1"
+}
+
+_active_text_contains() {
+  local needle=$1 text
+  text=$(printf '%s:%s' "${PATH:-}" "${PWD:-}" | tr '[:upper:]' '[:lower:]')
+  case "$text" in
+    *"$needle"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+_process_name_matches() {
+  local needle=$1
+  _process_tree_names | tr '[:upper:]' '[:lower:]' | grep -Eq "(^|[^a-z0-9])${needle}([^a-z0-9]|$)"
+}
+
+_process_tree_names() {
+  local pid=${BASHPID:-$$} ppid depth=0
+  while [ -n "$pid" ] && [ "$pid" != "0" ] && [ "$depth" -lt 12 ]; do
+    ps -o comm= -p "$pid" 2>/dev/null || true
+    ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')
+    [ -n "$ppid" ] && [ "$ppid" != "$pid" ] || break
+    pid=$ppid
+    depth=$((depth+1))
+  done
 }
 
 _validate_agent_platform() {
