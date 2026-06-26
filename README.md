@@ -101,6 +101,8 @@ direxio-connect daemon install --config ~/.direxio/nodes/<service_id>/cc-connect
 direxio-connect daemon status
 ```
 
+Voice input is supported when an STT provider key is available. Set `DIREXIO_SPEECH_API_KEY` or provider-specific variables such as `DIREXIO_SPEECH_QWEN_API_KEY`; S6 will then write `[speech] enabled = true` into `cc-connect/config.toml`.
+
 Homebrew documentation should use:
 
 ```bash

@@ -60,6 +60,7 @@ The config uses:
 - `admin_from = "@owner:<server>"` at the project level, so only the portal owner can run privileged commands such as `/dir` and `/shell`.
 - `share_session_in_channel = true` and `group_reply_all = true` for agent-room conversation continuity.
 - `auto_join = false` and `auto_verify = false`; message-server creates and joins the real room.
+- `[speech]` is generated and enabled automatically when S6 can find a speech-to-text API key. Without a key, voice input is not enabled and `direxio-connect` will answer voice messages with its speech configuration warning.
 
 `/dir reset` is expected to restore the generated `work_dir` and remove the current project directory override from `cc-connect/data/projects/<project>.state.json`.
 
@@ -76,6 +77,11 @@ DIREXIO_<AGENT>_COMMAND=<optional agent-specific executable path>
 DIREXIO_CC_CONNECT_AGENT_OPTIONS_TOML=<optional extra TOML under projects.agent.options>
 DIREXIO_CC_CONNECT_NPM_PACKAGE=@direxio/connent
 DIREXIO_CC_CONNECT_REPO=https://github.com/YingSuiAI/connect.git
+DIREXIO_SPEECH_PROVIDER=openai|groq|qwen|gemini
+DIREXIO_SPEECH_API_KEY=<optional generic STT key>
+DIREXIO_SPEECH_BASE_URL=<optional OpenAI-compatible STT base URL>
+DIREXIO_SPEECH_MODEL=<optional STT model>
+DIREXIO_SPEECH_LANGUAGE=zh
 ```
 
 Defaults:
@@ -88,6 +94,7 @@ Defaults:
 - `DIREXIO_AGENT_INSTALL=recommend` prints and records the command only.
 - `DIREXIO_AGENT_INSTALL=auto` runs `npm install -g @direxio/connent` and then installs the `direxio-connect` daemon with the generated config.
 - `DIREXIO_AGENT_INSTALL_MODE=recommended` maps every supported local runtime to `cc-connect`.
+- Speech defaults to `DIREXIO_SPEECH_PROVIDER=openai` and `DIREXIO_SPEECH_LANGUAGE=zh`. Provider-specific keys are also accepted: `DIREXIO_SPEECH_OPENAI_API_KEY` or `OPENAI_API_KEY`, `DIREXIO_SPEECH_GROQ_API_KEY` or `GROQ_API_KEY`, `DIREXIO_SPEECH_QWEN_API_KEY` or `DASHSCOPE_API_KEY`, and `DIREXIO_SPEECH_GEMINI_API_KEY`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY`. Set `DIREXIO_SPEECH_ENABLED=false` to suppress speech config generation even when a key exists.
 
 Manual command:
 

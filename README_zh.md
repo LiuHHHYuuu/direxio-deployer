@@ -99,6 +99,8 @@ direxio-connect daemon install --config ~/.direxio/nodes/<service_id>/cc-connect
 direxio-connect daemon status
 ```
 
+语音输入在配置 STT provider key 后可用。设置 `DIREXIO_SPEECH_API_KEY` 或 `DIREXIO_SPEECH_QWEN_API_KEY` 等 provider 专用变量后，S6 会在 `cc-connect/config.toml` 写入 `[speech] enabled = true`。
+
 Homebrew 文档使用：
 
 ```bash

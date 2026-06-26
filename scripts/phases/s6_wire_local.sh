@@ -466,6 +466,81 @@ _toml_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
+_env_first() {
+  local name value
+  for name in "$@"; do
+    value=${!name:-}
+    if [ -n "$value" ]; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  done
+  return 0
+}
+
+_lower() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+_cc_connect_speech_config_toml() {
+  local enabled provider language api_key base_url model
+  local q_provider q_language q_api_key q_base_url q_model
+  enabled=$(_lower "${DIREXIO_SPEECH_ENABLED:-auto}")
+  case "$enabled" in
+    0|false|off|no|disabled) return 0 ;;
+    ""|1|true|on|yes|auto|enabled) ;;
+    *) fail "DIREXIO_SPEECH_ENABLED must be auto, true, or false." ;;
+  esac
+
+  provider=$(_lower "${DIREXIO_SPEECH_PROVIDER:-openai}")
+  language=${DIREXIO_SPEECH_LANGUAGE:-zh}
+  case "$provider" in
+    openai)
+      api_key=$(_env_first DIREXIO_SPEECH_OPENAI_API_KEY DIREXIO_SPEECH_API_KEY OPENAI_API_KEY)
+      base_url=$(_env_first DIREXIO_SPEECH_OPENAI_BASE_URL DIREXIO_SPEECH_BASE_URL OPENAI_BASE_URL)
+      model=$(_env_first DIREXIO_SPEECH_OPENAI_MODEL DIREXIO_SPEECH_MODEL)
+      ;;
+    groq)
+      api_key=$(_env_first DIREXIO_SPEECH_GROQ_API_KEY DIREXIO_SPEECH_API_KEY GROQ_API_KEY)
+      model=$(_env_first DIREXIO_SPEECH_GROQ_MODEL DIREXIO_SPEECH_MODEL)
+      ;;
+    qwen)
+      api_key=$(_env_first DIREXIO_SPEECH_QWEN_API_KEY DIREXIO_SPEECH_API_KEY DASHSCOPE_API_KEY DASH_SCOPE_API_KEY)
+      base_url=$(_env_first DIREXIO_SPEECH_QWEN_BASE_URL DIREXIO_SPEECH_BASE_URL)
+      model=$(_env_first DIREXIO_SPEECH_QWEN_MODEL DIREXIO_SPEECH_MODEL)
+      ;;
+    gemini)
+      api_key=$(_env_first DIREXIO_SPEECH_GEMINI_API_KEY DIREXIO_SPEECH_API_KEY GEMINI_API_KEY GOOGLE_API_KEY)
+      model=$(_env_first DIREXIO_SPEECH_GEMINI_MODEL DIREXIO_SPEECH_MODEL)
+      ;;
+    *) fail "DIREXIO_SPEECH_PROVIDER must be openai, groq, qwen, or gemini." ;;
+  esac
+  if [ -z "$api_key" ]; then
+    return 0
+  fi
+
+  q_provider=$(_toml_escape "$provider")
+  q_language=$(_toml_escape "$language")
+  q_api_key=$(_toml_escape "$api_key")
+  q_base_url=$(_toml_escape "$base_url")
+  q_model=$(_toml_escape "$model")
+  cat <<EOF
+[speech]
+enabled = true
+provider = "$q_provider"
+language = "$q_language"
+
+[speech.$q_provider]
+api_key = "$q_api_key"
+EOF
+  if [ -n "$base_url" ]; then
+    printf 'base_url = "%s"\n' "$q_base_url"
+  fi
+  if [ -n "$model" ]; then
+    printf 'model = "%s"\n' "$q_model"
+  fi
+}
+
 _upper_drive() {
   printf '%s' "$1" | tr '[:lower:]' '[:upper:]'
 }
@@ -522,7 +597,7 @@ _create_cc_connect_matrix_session() {
 
 _write_cc_connect_config() {
   local config_path=$1 data_dir=$2 project=$3 agent=$4 workspace=$5 homeserver=$6 matrix_token=$7 matrix_user=$8 room_id=$9 admin_from=${10:-} agent_cmd=${11:-} agent_options_toml=${12:-}
-  local q_data q_project q_agent q_workspace q_homeserver q_token q_user q_room q_admin_from q_agent_cmd
+  local q_data q_project q_agent q_workspace q_homeserver q_token q_user q_room q_admin_from q_agent_cmd speech_toml
   mkdir -p "$(dirname "$config_path")" "$data_dir"
   q_data=$(_toml_escape "$data_dir")
   q_project=$(_toml_escape "$project")
@@ -534,10 +609,16 @@ _write_cc_connect_config() {
   q_room=$(_toml_escape "$room_id")
   q_admin_from=$(_toml_escape "$admin_from")
   q_agent_cmd=$(_toml_escape "$agent_cmd")
+  speech_toml=$(_cc_connect_speech_config_toml)
   umask 077
   cat > "$config_path" <<EOF
 language = "zh"
 data_dir = "$q_data"
+EOF
+  if [ -n "$speech_toml" ]; then
+    printf '\n%s\n' "$speech_toml" >> "$config_path"
+  fi
+  cat >> "$config_path" <<EOF
 
 [[projects]]
 name = "$q_project"

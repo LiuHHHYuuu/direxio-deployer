@@ -25,7 +25,19 @@ clear_runtime_env() {
   unset HERMES_SESSION CODEX_SANDBOX CLAUDECODE GEMINI_CLI CURSOR_TRACE_ID GITHUB_COPILOT_TOKEN DEVIN_SESSION IFLOW_SESSION KIMI_SESSION OPENCODE_SESSION QODER_SESSION PI_AGENT_SESSION ANTIGRAVITY_SESSION OPENCLAW_SESSION
 }
 
+clear_speech_env() {
+  local env_name
+  while IFS='=' read -r env_name _; do
+    case "$env_name" in
+      DIREXIO_SPEECH_*|OPENAI_API_KEY|OPENAI_BASE_URL|GROQ_API_KEY|DASHSCOPE_API_KEY|DASH_SCOPE_API_KEY|GEMINI_API_KEY|GOOGLE_API_KEY)
+        unset "$env_name"
+        ;;
+    esac
+  done < <(env)
+}
+
 clear_runtime_env
+clear_speech_env
 export DIREXIO_AGENT_DETECT_PROCESS=0
 
 unset DIREXIO_HOME
@@ -165,6 +177,21 @@ grep -q 'user_id = "@agent:im.example.test"' "$config_path"
 grep -q 'share_session_in_channel = true' "$config_path"
 grep -q 'group_reply_all = true' "$config_path"
 grep -q 'auto_join = false' "$config_path"
+! grep -q '^\[speech\]' "$config_path"
+
+speech_config_path="$tmp/cc-connect/config-with-speech.toml"
+DIREXIO_SPEECH_API_KEY=speech-key \
+DIREXIO_SPEECH_BASE_URL=https://stt.example.test/v1 \
+DIREXIO_SPEECH_MODEL=whisper-test \
+  _write_cc_connect_config "$speech_config_path" "$tmp/cc-connect/data-speech" "codex-node" "codex" "$tmp/workspace" "https://im.example.test" "matrix-token" "@agent:im.example.test" "!agents-real:im.example.test" "@owner:im.example.test"
+grep -q '^\[speech\]$' "$speech_config_path"
+grep -q 'enabled = true' "$speech_config_path"
+grep -q 'provider = "openai"' "$speech_config_path"
+grep -q 'language = "zh"' "$speech_config_path"
+grep -q '^\[speech.openai\]$' "$speech_config_path"
+grep -q 'api_key = "speech-key"' "$speech_config_path"
+grep -q 'base_url = "https://stt.example.test/v1"' "$speech_config_path"
+grep -q 'model = "whisper-test"' "$speech_config_path"
 
 [ "$(_cc_connect_agent_type codex)" = "codex" ]
 [ "$(_cc_connect_agent_type claude-code)" = "claudecode" ]

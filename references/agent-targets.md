@@ -50,6 +50,14 @@ cc-connect/matrix-session.json
 The generated `cc-connect/config.toml` contains exactly one Matrix platform and includes:
 
 ```toml
+[speech]
+enabled = true
+provider = "openai"
+language = "zh"
+
+[speech.openai]
+api_key = "<optional speech-to-text key>"
+
 [[projects]]
 name = "<agent-node-id>"
 admin_from = "@owner:<server>"
@@ -70,6 +78,8 @@ group_reply_all = true
 auto_join = false
 auto_verify = false
 ```
+
+The `[speech]` block is present only when S6 finds a speech-to-text API key from `DIREXIO_SPEECH_*` or supported provider environment variables. Voice input is not available without STT credentials.
 
 `admin_from` must stay at the `[[projects]]` level. `direxio-connect` uses the full Matrix sender ID, so S6 writes `@owner:<server>`; privileged commands such as `/dir`, `/shell`, `/show`, `/restart`, and `/upgrade` are blocked for other room members. `/dir reset` returns to the generated `work_dir` and clears the runtime override stored under `cc-connect/data/projects/<project>.state.json`.
 
