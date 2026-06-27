@@ -457,7 +457,7 @@ _cc_connect_config_path() {
 }
 
 _mcp_npm_package() {
-  printf '%s\n' "${DIREXIO_MCP_NPM_PACKAGE:-@direxio/local-mcp@0.1.2}"
+  printf '%s\n' "${DIREXIO_MCP_NPM_PACKAGE:-@direxio/local-mcp@0.1.4}"
 }
 
 _mcp_command() {
@@ -501,7 +501,7 @@ _mcp_readme_path() {
 
 _mcp_server_name() {
   local service_id=${1:-local}
-  printf 'direxio-%s\n' "$service_id" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g; s/^-+//; s/-+$//; s/^$/direxio-local/'
+  printf 'direxio-%s\n' "$service_id" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_-]+/_/g; s/^_+//; s/_+$//; s/^$/direxio_local/'
 }
 
 _cc_connect_binary_path() {

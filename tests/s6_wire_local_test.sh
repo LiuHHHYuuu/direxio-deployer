@@ -168,6 +168,9 @@ windows_install_command=$(DIREXIO_LOCAL_PATH_STYLE=windows _agent_install_comman
 [[ "$windows_install_command" == *"C:/Users/alice/.direxio/nodes/im/cc-connect/config.toml"* ]]
 [[ "$windows_install_command" == *"--service-name im"* ]]
 
+[ "$(_mcp_server_name "im.example.test")" = "direxio-im_example_test" ]
+[ "$(_mcp_server_name "T1.Direxio.AI")" = "direxio-t1_direxio_ai" ]
+
 mcp_service_dir="$tmp/mcp-service"
 mcp_credentials="$mcp_service_dir/credentials.json"
 mkdir -p "$mcp_service_dir"
@@ -178,15 +181,15 @@ _write_mcp_config_artifacts "im.example.test" "$mcp_service_dir" "$mcp_credentia
 [ -s "$mcp_service_dir/mcp/hermes.mcp.json" ]
 [ -s "$mcp_service_dir/mcp/mcp-servers.json" ]
 [ -s "$mcp_service_dir/mcp/env" ]
-grep -q '\[mcp_servers."direxio-im.example.test"\]' "$mcp_service_dir/mcp/codex.toml"
+grep -q '\[mcp_servers."direxio-im_example_test"\]' "$mcp_service_dir/mcp/codex.toml"
 grep -q 'command = "direxio-mcp"' "$mcp_service_dir/mcp/codex.toml"
 grep -q 'DIREXIO_CREDENTIALS_FILE' "$mcp_service_dir/mcp/codex.toml"
 grep -q "$mcp_credentials" "$mcp_service_dir/mcp/codex.toml"
-jq -e '.mcpServers["direxio-im.example.test"].command == "direxio-mcp"' "$mcp_service_dir/mcp/openclaw.mcp.json" >/dev/null
-jq -e '.mcpServers["direxio-im.example.test"].env.DIREXIO_CREDENTIALS_FILE == "'"$mcp_credentials"'"' "$mcp_service_dir/mcp/hermes.mcp.json" >/dev/null
+jq -e '.mcpServers["direxio-im_example_test"].command == "direxio-mcp"' "$mcp_service_dir/mcp/openclaw.mcp.json" >/dev/null
+jq -e '.mcpServers["direxio-im_example_test"].env.DIREXIO_CREDENTIALS_FILE == "'"$mcp_credentials"'"' "$mcp_service_dir/mcp/hermes.mcp.json" >/dev/null
 grep -q 'DIREXIO_AGENT_NODE_ID=codex-im-example' "$mcp_service_dir/mcp/env"
 mcp_install_command=$(_mcp_install_command)
-[[ "$mcp_install_command" == *"npm install -g"*"@direxio/local-mcp@0.1.2"* ]]
+[[ "$mcp_install_command" == *"npm install -g"*"@direxio/local-mcp@0.1.4"* ]]
 mcp_doctor_command=$(_mcp_doctor_command "$mcp_credentials" "codex-im-example")
 [[ "$mcp_doctor_command" == *"DIREXIO_CREDENTIALS_FILE="* ]]
 [[ "$mcp_doctor_command" == *"direxio-mcp doctor --json"* ]]

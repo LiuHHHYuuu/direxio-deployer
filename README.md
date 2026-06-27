@@ -117,7 +117,7 @@ direxio-connect daemon status --service-name <service_id>
 MCP install and check:
 
 ```bash
-npm install -g @direxio/local-mcp@0.1.2
+npm install -g @direxio/local-mcp@0.1.4
 DIREXIO_CREDENTIALS_FILE=~/.direxio/nodes/<service_id>/credentials.json direxio-mcp doctor --json
 ```
 
