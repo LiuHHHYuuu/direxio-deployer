@@ -66,8 +66,8 @@ S6 也会写：
 刷新后重新安装或重启本地 bridge：
 
 ```bash
-direxio-connect daemon install --config ~/.direxio/nodes/<service_id>/cc-connect/config.toml --force
-direxio-connect daemon status
+direxio-connect daemon install --config ~/.direxio/nodes/<service_id>/cc-connect/config.toml --service-name <service_id> --force
+direxio-connect daemon status --service-name <service_id>
 ```
 
 ## 验证

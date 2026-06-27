@@ -12,6 +12,11 @@ mkdir -p "$HOME"
 # shellcheck disable=SC1090
 source "$ROOT/scripts/phases/s6_wire_local.sh"
 
+ok() { echo "[test-ok] $*" >&2; }
+warn() { echo "[test-warn] $*" >&2; }
+fail() { echo "$*" >&2; return 1; }
+state_set() { printf '%s=%s\n' "$1" "$2" >> "${STATE_CALLS:?}"; }
+
 clear_runtime_env() {
   local env_name
   while IFS='=' read -r env_name _; do
@@ -23,6 +28,7 @@ clear_runtime_env() {
   done < <(env)
   unset ACP_HOME ANTIGRAVITY_HOME AGY_HOME HERMES_HOME CODEX_HOME CLAUDE_HOME CLAUDECODE_HOME GEMINI_HOME CURSOR_HOME COPILOT_HOME DEVIN_HOME IFLOW_HOME KIMI_HOME OPENCODE_HOME OPEN_CODE_HOME PI_CODING_AGENT_DIR PI_HOME QODER_HOME REASONIX_HOME TMUX_HOME OPENCLAW_HOME
   unset HERMES_SESSION CODEX_SANDBOX CLAUDECODE GEMINI_CLI CURSOR_TRACE_ID GITHUB_COPILOT_TOKEN DEVIN_SESSION IFLOW_SESSION KIMI_SESSION OPENCODE_SESSION QODER_SESSION PI_AGENT_SESSION ANTIGRAVITY_SESSION OPENCLAW_SESSION
+  unset DIREXIO_CC_CONNECT_AGENT DIREXIO_CC_CONNECT_AGENT_CMD
 }
 
 clear_speech_env() {
@@ -70,6 +76,7 @@ fi
 [ "$(DIREXIO_AGENT_PLATFORM=claude-code _detect_agent_runtime)" = "claude-code" ]
 [ "$(DIREXIO_AGENT_PLATFORM=opencode _detect_agent_runtime)" = "opencode" ]
 [ "$(DIREXIO_CC_CONNECT_AGENT=qodercli _detect_agent_runtime)" = "qoder" ]
+[ "$(DIREXIO_AGENT_PLATFORM=hermes DIREXIO_CC_CONNECT_AGENT=codex _detect_agent_runtime)" = "hermes" ]
 assert_active_runtime() {
   local expected=$1 signal=$2
   shift 2
@@ -146,9 +153,9 @@ fi
 [ "$(_agent_global_skill_install_path claudecode)" = '${CLAUDE_HOME:-${CLAUDECODE_HOME:-$HOME/.claude}}/skills/direxio-deployer' ]
 [ "$(_agent_global_skill_install_path generic)" = '$HOME/.agent/skills/direxio-deployer' ]
 
-install_command=$(_agent_install_command "direxio-connect" "$HOME/.direxio/nodes/im.example.test/cc-connect/config.toml")
+install_command=$(_agent_install_command "direxio-connect" "$HOME/.direxio/nodes/im.example.test/cc-connect/config.toml" "im.example.test")
 case "$install_command" in
-  *"npm install -g"*"@direxio/connent"*"direxio-connect"*"daemon install"*"--config"*"im.example.test/cc-connect/config.toml"*"--force"*) ;;
+  *"npm install -g"*"@direxio/connent"*"direxio-connect"*"daemon install"*"--config"*"im.example.test/cc-connect/config.toml"*"--service-name"*"im.example.test"*"--force"*) ;;
   *)
     echo "install command did not include expected cc-connect daemon flags: $install_command" >&2
     exit 1
@@ -157,8 +164,9 @@ esac
 
 [ "$(DIREXIO_LOCAL_PATH_STYLE=windows _local_connect_path '/mnt/c/Users/alice/.direxio/nodes/im/cc-connect/config.toml')" = "C:/Users/alice/.direxio/nodes/im/cc-connect/config.toml" ]
 [ "$(DIREXIO_LOCAL_PATH_STYLE=windows _local_connect_path '/c/Users/alice/.direxio/nodes/im/cc-connect/config.toml')" = "C:/Users/alice/.direxio/nodes/im/cc-connect/config.toml" ]
-windows_install_command=$(DIREXIO_LOCAL_PATH_STYLE=windows _agent_install_command "direxio-connect" "/mnt/c/Users/alice/.direxio/nodes/im/cc-connect/config.toml")
+windows_install_command=$(DIREXIO_LOCAL_PATH_STYLE=windows _agent_install_command "direxio-connect" "/mnt/c/Users/alice/.direxio/nodes/im/cc-connect/config.toml" "im")
 [[ "$windows_install_command" == *"C:/Users/alice/.direxio/nodes/im/cc-connect/config.toml"* ]]
+[[ "$windows_install_command" == *"--service-name im"* ]]
 
 stale_node_id=$(DIREXIO_AGENT_NODE_ID=codex-old.example.test _agent_node_id codex new.example.test '!agents-real:new.example.test')
 [[ "$stale_node_id" == codex-new.example.test-* ]]
@@ -200,6 +208,12 @@ grep -q 'model = "whisper-test"' "$speech_config_path"
 [ "$(_cc_connect_agent_type qodercli)" = "qoder" ]
 [ "$(_cc_connect_agent_type antigravity)" = "antigravity" ]
 [ "$(DIREXIO_CC_CONNECT_AGENT=gemini _cc_connect_agent_type unknown)" = "gemini" ]
+[ "$(DIREXIO_CC_CONNECT_AGENT=codex _cc_connect_agent_type hermes)" = "codex" ]
+if (unset DIREXIO_CC_CONNECT_AGENT; _cc_connect_agent_type hermes) >/tmp/unused-cc-agent 2>"$tmp/hermes-cc-agent.err"; then
+  echo "hermes host runtime must require an explicit DIREXIO_CC_CONNECT_AGENT" >&2
+  exit 1
+fi
+grep -q 'DIREXIO_CC_CONNECT_AGENT' "$tmp/hermes-cc-agent.err"
 [ "$(DIREXIO_CODEX_COMMAND=/opt/codex/bin/codex _cc_connect_agent_command codex)" = "/opt/codex/bin/codex" ]
 [ "$(DIREXIO_GEMINI_COMMAND=/opt/gemini/bin/gemini _cc_connect_agent_command gemini)" = "/opt/gemini/bin/gemini" ]
 [ "$(DIREXIO_CLAUDE_CODE_COMMAND=/opt/claude/bin/claude _cc_connect_agent_command claudecode)" = "/opt/claude/bin/claude" ]
@@ -215,11 +229,46 @@ _write_cc_connect_config "$options_config_path" "$tmp/cc-connect/data-options" "
 grep -q 'type = "reasonix"' "$options_config_path"
 grep -q 'serve_url = "http://127.0.0.1:8080"' "$options_config_path"
 
+fakebin="$tmp/fakebin"
+mkdir -p "$fakebin"
+cat > "$fakebin/npm" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+cat > "$fakebin/direxio-connect" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = "daemon" ] && [ "${2:-}" = "install" ]; then
+  [ "${5:-}" = "--service-name" ]
+  [ "${6:-}" = "im.example.test" ]
+  exit 0
+fi
+if [ "${1:-}" = "daemon" ] && [ "${2:-}" = "status" ]; then
+  [ "${3:-}" = "--service-name" ]
+  [ "${4:-}" = "im.example.test" ]
+  cat <<STATUS
+direxio-connect daemon status
+
+  Status:    Stopped
+  Platform:  launchd
+  WorkDir:   /tmp/direxio-test/cc-connect
+STATUS
+  exit 0
+fi
+exit 1
+EOF
+chmod 700 "$fakebin/npm" "$fakebin/direxio-connect"
+STATE_CALLS="$tmp/state.calls"
+: > "$STATE_CALLS"
+PATH="$fakebin:$PATH" _maybe_auto_install_cc_connect auto codex codex "$tmp/service" "$tmp/service/cc-connect/config.toml" direxio-connect im.example.test
+grep -q '^agent_install_status=install_failed$' "$STATE_CALLS"
+
 guidance=$(
-  _print_cc_connect_guidance codex https://im.example.test "$HOME/.direxio/nodes/im.example.test/credentials.json" "$HOME/.direxio/nodes/im.example.test/env" recommend cc-connect "install command" codex-im "$config_path" "$HOME/.direxio/nodes/im.example.test/cc-connect/bin/direxio-connect" codex "/opt/codex/bin/codex" 2>&1 >/dev/null
+  _print_cc_connect_guidance codex https://im.example.test "$HOME/.direxio/nodes/im.example.test/credentials.json" "$HOME/.direxio/nodes/im.example.test/env" recommend cc-connect "install command" codex-im "$config_path" "$HOME/.direxio/nodes/im.example.test/cc-connect/bin/direxio-connect" codex "/opt/codex/bin/codex" im.example.test 2>&1 >/dev/null
 )
 [[ "$guidance" == *"DIREXIO_DOMAIN"* ]]
 [[ "$guidance" == *"DIREXIO_AGENT_TOKEN"* ]]
+[[ "$guidance" == *"cc-connect service"* ]]
 [[ "$guidance" == *"DIREXIO_AGENT_ROOM_ID"* ]]
 [[ "$guidance" == *"DIREXIO_AGENT_NODE_ID"* ]]
 [[ "$guidance" == *"cc-connect config"* ]]

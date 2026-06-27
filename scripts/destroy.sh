@@ -43,6 +43,7 @@ CC_CONNECT_CONFIG=$(jq -r '.cc_connect_config // empty' "$SRC")
 CC_CONNECT_BINARY=$(jq -r '.cc_connect_binary // empty' "$SRC")
 CC_CONNECT_RUNTIME_DIR=$(jq -r '.cc_connect_runtime_dir // empty' "$SRC")
 AGENT_SERVICE_DIR=$(jq -r '.agent_service_dir // empty' "$SRC")
+AGENT_SERVICE_ID=$(jq -r '.agent_service_id // empty' "$SRC")
 
 export NO_PROXY="*"; export no_proxy="*"
 unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy 2>/dev/null || true
@@ -226,14 +227,31 @@ cc_connect_target_work_dir() {
   fi
 }
 
+cc_connect_service_name() {
+  local service_id=$1 service_dir=$2 asurl=$3 domain=$4
+  if [ -n "$service_id" ]; then
+    printf '%s\n' "$service_id"
+    return 0
+  fi
+  if [ -n "$service_dir" ]; then
+    basename "$service_dir"
+    return 0
+  fi
+  if [ -n "$asurl" ] || [ -n "$domain" ]; then
+    direxio_service_id "${asurl:-$domain}"
+    return 0
+  fi
+  printf 'cc-connect\n'
+}
+
 cc_connect_status_work_dir() {
-  local binary=$1 out
-  out=$("$binary" daemon status 2>/dev/null) || return 1
+  local binary=$1 service_name=$2 out
+  out=$("$binary" daemon status --service-name "$service_name" 2>/dev/null) || return 1
   printf '%s\n' "$out" | sed -nE 's/^[[:space:]]*WorkDir:[[:space:]]*//p' | head -n 1
 }
 
 stop_current_cc_connect_daemon() {
-  local config=$1 binary=$2 runtime_dir=$3 service_dir=$4 target_work_dir running_work_dir stop_binary
+  local config=$1 binary=$2 runtime_dir=$3 service_dir=$4 service_name=$5 target_work_dir running_work_dir stop_binary
   target_work_dir=$(cc_connect_target_work_dir "$config" "$runtime_dir" "$service_dir")
   if [ -z "$target_work_dir" ]; then
     log "cc-connect service directory not recorded; skipping local daemon stop"
@@ -251,7 +269,7 @@ stop_current_cc_connect_daemon() {
       ;;
   esac
 
-  running_work_dir=$(cc_connect_status_work_dir "$stop_binary")
+  running_work_dir=$(cc_connect_status_work_dir "$stop_binary" "$service_name")
   if [ -z "$running_work_dir" ]; then
     log "cc-connect daemon status has no WorkDir; skipping local daemon stop"
     return 0
@@ -263,7 +281,7 @@ stop_current_cc_connect_daemon() {
   fi
 
   log "stopping cc-connect daemon for current service ..."
-  if "$stop_binary" daemon stop >/dev/null 2>&1; then
+  if "$stop_binary" daemon stop --service-name "$service_name" >/dev/null 2>&1; then
     log "cc-connect daemon stopped"
   else
     log "cc-connect daemon stop failed or service was not installed; continuing destroy"
@@ -312,7 +330,8 @@ cleanup_local_service_dir() {
 
 # 0. Remove DNS record if ops created it through Route53 mode.
 CURRENT_SERVICE_DIR=$(current_service_dir "$AGENT_SERVICE_DIR" "$AS_URL" "$DOMAIN" "$CC_CONNECT_CONFIG")
-stop_current_cc_connect_daemon "$CC_CONNECT_CONFIG" "$CC_CONNECT_BINARY" "$CC_CONNECT_RUNTIME_DIR" "$CURRENT_SERVICE_DIR"
+CURRENT_SERVICE_NAME=$(cc_connect_service_name "$AGENT_SERVICE_ID" "$CURRENT_SERVICE_DIR" "$AS_URL" "$DOMAIN")
+stop_current_cc_connect_daemon "$CC_CONNECT_CONFIG" "$CC_CONNECT_BINARY" "$CC_CONNECT_RUNTIME_DIR" "$CURRENT_SERVICE_DIR" "$CURRENT_SERVICE_NAME"
 
 if [ "${DOMAIN_MODE:-}" = "route53" ]; then
   delete_route53_record "$DOMAIN" "$PUBLIC_IP"

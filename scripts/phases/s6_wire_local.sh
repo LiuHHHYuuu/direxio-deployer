@@ -44,20 +44,23 @@ _cc_connect_agent_alias() {
 
 _validate_cc_connect_agent() {
   local agent
-  agent=$(_cc_connect_agent_alias "$1" 2>/dev/null) || fail "cc-connect agent must be one of: $(_cc_connect_supported_agents_csv)."
+  agent=$(_cc_connect_agent_alias "$1" 2>/dev/null) || {
+    fail "cc-connect agent must be one of: $(_cc_connect_supported_agents_csv)."
+    return 1
+  }
   printf '%s\n' "$agent"
 }
 
 _detect_agent_runtime() {
   local active_runtime explicit_agent home_runtime
-  if [ -n "${DIREXIO_CC_CONNECT_AGENT:-}" ]; then
-    explicit_agent=$(_validate_cc_connect_agent "$DIREXIO_CC_CONNECT_AGENT")
-    printf '%s\n' "$explicit_agent"
-    return 0
-  fi
   if [ -n "${DIREXIO_AGENT_PLATFORM:-}" ] && [ "${DIREXIO_AGENT_PLATFORM:-}" != "auto" ]; then
     _validate_agent_platform "$DIREXIO_AGENT_PLATFORM"
     printf '%s\n' "$DIREXIO_AGENT_PLATFORM"
+    return 0
+  fi
+  if [ -n "${DIREXIO_CC_CONNECT_AGENT:-}" ]; then
+    explicit_agent=$(_validate_cc_connect_agent "$DIREXIO_CC_CONNECT_AGENT")
+    printf '%s\n' "$explicit_agent"
     return 0
   fi
   # Active-process signals are stronger than stale config directories from
@@ -392,6 +395,10 @@ _cc_connect_agent_type() {
     _validate_cc_connect_agent "$explicit"
     return 0
   fi
+  if ! _cc_connect_agent_alias "$runtime" >/dev/null 2>&1; then
+    fail "detected runtime '$runtime' is not a direxio-connect agent. Set DIREXIO_CC_CONNECT_AGENT to one of: $(_cc_connect_supported_agents_csv)."
+    return 1
+  fi
   _validate_cc_connect_agent "$runtime"
 }
 
@@ -652,13 +659,22 @@ EOF
 }
 
 _cc_connect_install_command() {
-  local binary=$1 config=$2
-  printf 'npm install -g %q && %q daemon install --config %q --force' "$(_cc_connect_npm_package)" "$binary" "$(_local_connect_path "$config")"
+  local binary=$1 config=$2 service_name=$3
+  [ -n "$service_name" ] || service_name=cc-connect
+  printf 'npm install -g %q && %q daemon install --config %q --service-name %q --force' "$(_cc_connect_npm_package)" "$binary" "$(_local_connect_path "$config")" "$service_name"
+}
+
+_cc_connect_daemon_is_running() {
+  local binary=$1 service_name=$2 status
+  [ -n "$service_name" ] || service_name=cc-connect
+  status=$("$binary" daemon status --service-name "$service_name" 2>/dev/null || true)
+  printf '%s\n' "$status" | grep -Eq 'Status:[[:space:]]*Running'
 }
 
 _maybe_auto_install_cc_connect() {
-  local policy=$1 runtime=$2 cc_agent=$3 service_dir=$4 config_path=$5 binary=$6
+  local policy=$1 runtime=$2 cc_agent=$3 service_dir=$4 config_path=$5 binary=$6 service_name=$7
   local repo ref src commit config_arg
+  [ -n "$service_name" ] || service_name=$(basename "$service_dir")
   if [ "$policy" != "auto" ]; then
     state_set agent_install_status "$policy" 2>/dev/null || true
     return 0
@@ -670,7 +686,12 @@ _maybe_auto_install_cc_connect() {
       state_set agent_install_status "npm_missing" 2>/dev/null || true
       return 0
     fi
-    if npm install -g "$(_cc_connect_npm_package)" && "$binary" daemon install --config "$config_arg" --force; then
+    if npm install -g "$(_cc_connect_npm_package)" && "$binary" daemon install --config "$config_arg" --service-name "$service_name" --force; then
+      if ! _cc_connect_daemon_is_running "$binary" "$service_name"; then
+        state_set agent_install_status "install_failed" 2>/dev/null || true
+        warn "cc-connect daemon install returned success, but daemon status is not Running. Check the local agent command and cc-connect logs."
+        return 0
+      fi
       state_set agent_install_status "installed" 2>/dev/null || true
       ok "cc-connect daemon installed from npm for $runtime using Matrix room bridge."
     else
@@ -721,7 +742,12 @@ _maybe_auto_install_cc_connect() {
     return 0
   fi
   chmod 700 "$binary" 2>/dev/null || true
-  if "$binary" daemon install --config "$config_arg" --force; then
+  if "$binary" daemon install --config "$config_arg" --service-name "$service_name" --force; then
+    if ! _cc_connect_daemon_is_running "$binary" "$service_name"; then
+      state_set agent_install_status "install_failed" 2>/dev/null || true
+      warn "cc-connect daemon install returned success, but daemon status is not Running. Check the local agent command and cc-connect logs."
+      return 0
+    fi
     state_set agent_install_status "installed" 2>/dev/null || true
     ok "cc-connect daemon installed for $runtime using Matrix room bridge."
   else
@@ -779,21 +805,22 @@ _agent_global_skill_install_path() {
 }
 
 _agent_install_command() {
-  local binary=$1 config=$2
-  _cc_connect_install_command "$binary" "$config"
+  local binary=$1 config=$2 service_name=$3
+  _cc_connect_install_command "$binary" "$config" "$service_name"
 }
 
 _print_runtime_install_summary() {
-  local runtime=$1 mode=$2 config_path=$3 binary=$4 cc_agent=$5 cc_agent_cmd=${6:-}
+  local runtime=$1 mode=$2 config_path=$3 binary=$4 cc_agent=$5 cc_agent_cmd=${6:-} service_name=${7:-}
   cat >&2 <<EOF
 Recommended cc-connect install:
   runtime:        $runtime
   cc-connect agent: $cc_agent
   agent command:  ${cc_agent_cmd:-default PATH lookup}
   mode:           $mode
+  service name:   $service_name
   config:         $config_path
   binary:         $binary
-  daemon install: $(_cc_connect_install_command "$binary" "$config_path")
+  daemon install: $(_cc_connect_install_command "$binary" "$config_path" "$service_name")
 EOF
 }
 
@@ -862,7 +889,7 @@ _persist_agent_env() {
 }
 
 _print_cc_connect_guidance() {
-  local runtime=$1 asurl=$2 cred=$3 envfile=$4 policy=$5 mode=$6 install_command=$7 node_id=$8 cc_config=$9 cc_binary=${10} cc_agent=${11} cc_agent_cmd=${12:-}
+  local runtime=$1 asurl=$2 cred=$3 envfile=$4 policy=$5 mode=$6 install_command=$7 node_id=$8 cc_config=$9 cc_binary=${10} cc_agent=${11} cc_agent_cmd=${12:-} service_name=${13:-}
   local skill_path global_skill_path
   skill_path=$(_agent_skill_install_path "$runtime")
   global_skill_path=$(_agent_global_skill_install_path "$runtime")
@@ -879,6 +906,7 @@ Credential file:        $cred
 cc-connect config:      $cc_config
 cc-connect binary:      $cc_binary
 cc-connect agent cmd:   ${cc_agent_cmd:-default PATH lookup}
+cc-connect service:     $service_name
 Install command:        $install_command
 Project skill clone:    $skill_path
 Global skill fallback:  $global_skill_path
@@ -887,7 +915,7 @@ Env keys:               DIREXIO_DOMAIN, DIREXIO_AGENT_TOKEN, DIREXIO_AGENT_ROOM_
 cc-connect will use Matrix Client-Server sync as @agent:<server> and is restricted to DIREXIO_AGENT_ROOM_ID.
 It talks directly to the Direxio homeserver for the agents room conversation.
 EOF
-  _print_runtime_install_summary "$runtime" "$mode" "$cc_config" "$cc_binary" "$cc_agent" "$cc_agent_cmd"
+  _print_runtime_install_summary "$runtime" "$mode" "$cc_config" "$cc_binary" "$cc_agent" "$cc_agent_cmd" "$service_name"
 }
 
 run_phase() {
@@ -984,7 +1012,7 @@ run_phase() {
 
   install_policy=$(_agent_install_policy)
   install_mode=$(_agent_install_mode "$runtime")
-  install_command=$(_agent_install_command "$cc_binary" "$cc_config")
+  install_command=$(_agent_install_command "$cc_binary" "$cc_config" "$service_id")
   skill_path=$(_agent_skill_install_path "$runtime")
   global_skill_path=$(_agent_global_skill_install_path "$runtime")
   state_set agent_runtime "$runtime" 2>/dev/null || true
@@ -994,8 +1022,8 @@ run_phase() {
   state_set agent_skill_install_path "$skill_path" 2>/dev/null || true
   state_set agent_global_skill_install_path "$global_skill_path" 2>/dev/null || true
   state_set direxio_agent_bridge "cc-connect" 2>/dev/null || true
-  _print_cc_connect_guidance "$runtime" "$asurl" "$node_cred" "$envfile" "$install_policy" "$install_mode" "$install_command" "$node_id" "$cc_config_local" "$cc_binary" "$cc_agent" "$cc_agent_cmd"
-  _maybe_auto_install_agent "$install_policy" "$runtime" "$cc_agent" "$service_dir" "$cc_config" "$cc_binary"
+  _print_cc_connect_guidance "$runtime" "$asurl" "$node_cred" "$envfile" "$install_policy" "$install_mode" "$install_command" "$node_id" "$cc_config_local" "$cc_binary" "$cc_agent" "$cc_agent_cmd" "$service_id"
+  _maybe_auto_install_agent "$install_policy" "$runtime" "$cc_agent" "$service_dir" "$cc_config" "$cc_binary" "$service_id"
 
   phase_set S6_WIRE_LOCAL done "credentials.json written;node_id=$node_id;service_id=$service_id;env_file=$envfile;runtime=$runtime;install_policy=$install_policy;install_mode=$install_mode;cc_connect_config=$cc_config;cc_connect_agent=$cc_agent"
   return 0

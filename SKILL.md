@@ -267,7 +267,9 @@ The only supported local conversation bridge is `direxio-connect`, installed fro
 
 `DIREXIO_CC_CONNECT_AGENT` is the preferred explicit selector. Supported values match connent/connect: `acp`, `antigravity`, `claudecode`, `codex`, `copilot`, `cursor`, `devin`, `gemini`, `iflow`, `kimi`, `opencode`, `pi`, `qoder`, `reasonix`, and `tmux`. Use `DIREXIO_CC_CONNECT_AGENT_CMD`, `DIREXIO_<AGENT>_COMMAND`, and when needed `DIREXIO_CC_CONNECT_AGENT_OPTIONS_TOML` for agent-specific launch details.
 
-`DIREXIO_AGENT_INSTALL` may be `skip`, `recommend`, or `auto`. Only `auto` attempts to run `npm install -g @direxio/connent` and `direxio-connect daemon install --config ~/.direxio/nodes/<service_id>/cc-connect/config.toml --force`; the default `recommend` records and prints the command without mutating local daemon state.
+`DIREXIO_AGENT_PLATFORM` describes the host runtime following the skill, while `DIREXIO_CC_CONNECT_AGENT` describes the local agent backend that `direxio-connect` should launch. Host runtimes such as Hermes or OpenClaw are not cc-connect backends; when they are detected, set `DIREXIO_CC_CONNECT_AGENT` explicitly, for example `DIREXIO_AGENT_PLATFORM=hermes DIREXIO_CC_CONNECT_AGENT=codex`.
+
+`DIREXIO_AGENT_INSTALL` may be `skip`, `recommend`, or `auto`. Only `auto` attempts to run `npm install -g @direxio/connent` and `direxio-connect daemon install --config ~/.direxio/nodes/<service_id>/cc-connect/config.toml --service-name <service_id> --force`; the default `recommend` records and prints the command without mutating local daemon state. An automatic install is reported as installed only when `direxio-connect daemon status --service-name <service_id>` returns `Status: Running`; otherwise S6 records `agent_install_status=install_failed`.
 
 Voice input is supported through `direxio-connect` speech-to-text. When `DIREXIO_SPEECH_API_KEY` or a provider-specific key such as `DIREXIO_SPEECH_QWEN_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY`, `DASHSCOPE_API_KEY`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY` is present, S6 writes `[speech] enabled = true` into the generated config. Without an STT key, do not claim voice input is enabled.
 
@@ -338,7 +340,8 @@ IP-derived, localhost, wildcard, or disposable domains.
    **Runtime detection note:** S6 checks active-process signals before stale
    config directories, so current-session markers, environment variables, and
    process names win over historical runtime directories. If a session still
-   appears ambiguous, set `DIREXIO_CC_CONNECT_AGENT=<agent>` explicitly before
+   appears ambiguous, or the host runtime is Hermes/OpenClaw rather than a
+   cc-connect backend, set `DIREXIO_CC_CONNECT_AGENT=<agent>` explicitly before
    deployment. Also see
    `references/windows-deployment-notes.md`.
    **⚠️ Route53 pre-requisite for domains at other registrars:** The script's `_find_route53_zone()` looks up existing hosted zones only — it does NOT create one. If the domain is registered at Alibaba, GoDaddy, Cloudflare, etc. and the user chose Route53 management, the agent must pre-create the hosted zone (see Step 4 DNS control) BEFORE running orchestrate.sh. Do not rely on the script to create the zone.
@@ -361,11 +364,11 @@ IP-derived, localhost, wildcard, or disposable domains.
 
 8. After authoritative DNS resolves, rerun the same command with `DNS_READY=1`.
 9. After S7 passes, read `references/runtime-wiring.md` and `references/agent-targets.md`, then report the URL, `password`, agent token status, real `agent_room_id`, persistent Direxio env status, cc-connect config path, Matrix bridge user/device, resources, SSH command, state path, and destroy command.
-10. Read the selected connect agent from S6 state (`cc_connect_agent`) and report the recorded `agent_install_command`. If `DIREXIO_AGENT_INSTALL=auto` was explicitly set, S6 may have installed the daemon already; otherwise leave installation as an explicit operator action.
+10. Read the selected connect agent from S6 state (`cc_connect_agent`) and report the recorded `agent_install_command` and `agent_install_status`. If `DIREXIO_AGENT_INSTALL=auto` was explicitly set, treat the daemon as installed only when S6 recorded `agent_install_status=installed`; `install_failed` means the daemon command returned but `direxio-connect daemon status --service-name <service_id>` was not `Status: Running`. Otherwise leave installation as an explicit operator action.
 
 ## Destroy Flow
 
-Use `scripts/destroy.sh` for teardown. Destroy first checks the local `direxio-connect` daemon status and stops it only when the reported `WorkDir` matches the current service directory, `~/.direxio/nodes/<service_id>/cc-connect`. After AWS resources are terminated and released, destroy removes the corresponding local service directory under `~/.direxio/nodes/<service_id>` so stale state, credentials, and bridge files cannot block or mislead the next deployment. It leaves unrelated node credential directories intact.
+Use `scripts/destroy.sh` for teardown. Destroy first checks `direxio-connect daemon status --service-name <service_id>` and stops only that named daemon when the reported `WorkDir` matches the current service directory, `~/.direxio/nodes/<service_id>/cc-connect`. After AWS resources are terminated and released, destroy removes the corresponding local service directory under `~/.direxio/nodes/<service_id>` so stale state, credentials, and bridge files cannot block or mislead the next deployment. It leaves unrelated node credential directories intact.
 
 If an operator needs to preserve local state files for debugging, run destroy with `P2P_KEEP_WORKDIR=1` and explicitly report that the stale service directory remains.
 
@@ -451,12 +454,12 @@ Destroy      : bash scripts/destroy.sh
 
 Mention that AWS resources keep billing until destroyed. User-managed DNS and purchased domains are not removed by destroy. After destroy, report which `~/.direxio/nodes/<service_id>` service directory was removed or, if `P2P_KEEP_WORKDIR=1` was used, which local directory remains.
 
-If `DIREXIO_AGENT_INSTALL=auto` was not used, give the manual command:
+If `DIREXIO_AGENT_INSTALL=auto` was not used, or if it recorded `install_failed`, give the manual command:
 
 ```bash
 npm install -g @direxio/connent
-direxio-connect daemon install --config <cc_connect_config> --force
-direxio-connect daemon status
+direxio-connect daemon install --config <cc_connect_config> --service-name <service_id> --force
+direxio-connect daemon status --service-name <service_id>
 ```
 
 ## References

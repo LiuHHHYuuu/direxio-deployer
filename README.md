@@ -23,8 +23,9 @@
 - S6 rejects legacy pseudo agent rooms such as `!agent:<domain>` and requires the real Matrix `agent_room_id` created by message-server.
 - S6 creates an `@agent:<server>` Matrix session through `agent.matrix_session.create`, writes a Matrix-only `cc-connect/config.toml`, and restricts the bridge to the current `agent_room_id`.
 - `DIREXIO_CC_CONNECT_AGENT` selects the local `direxio-connect` agent type. Supported values match connent/connect: `acp`, `antigravity`, `claudecode`, `codex`, `copilot`, `cursor`, `devin`, `gemini`, `iflow`, `kimi`, `opencode`, `pi`, `qoder`, `reasonix`, and `tmux`.
+- `DIREXIO_AGENT_PLATFORM` is the host runtime following this deployer skill; `DIREXIO_CC_CONNECT_AGENT` is the backend that `direxio-connect` launches. If the host runtime is Hermes/OpenClaw or anything else that is not a supported connect agent, set `DIREXIO_CC_CONNECT_AGENT` explicitly.
 - Set `DIREXIO_CC_CONNECT_AGENT_CMD` or `DIREXIO_<AGENT>_COMMAND` when a local agent executable is not discoverable from PATH. Codex also supports `DIREXIO_CODEX_COMMAND` for Windows Desktop installs.
-- `DIREXIO_AGENT_INSTALL=auto` installs `@direxio/connent` and runs `direxio-connect daemon install --config <config> --force`. The default `recommend` mode only records and prints the command.
+- `DIREXIO_AGENT_INSTALL=auto` installs `@direxio/connent` and runs `direxio-connect daemon install --config <config> --service-name <service_id> --force`. The default `recommend` mode only records and prints the command. Auto install is marked installed only when `direxio-connect daemon status --service-name <service_id>` reports `Status: Running`; otherwise S6 records `agent_install_status=install_failed`.
 
 ## Minimal Command
 
@@ -69,7 +70,7 @@ bash scripts/orchestrate.sh
 ```
 
 Supported install modes: `recommended` and `cc-connect`.
-If `DIREXIO_AGENT_PLATFORM=auto` cannot identify a single supported runtime, set `DIREXIO_CC_CONNECT_AGENT` explicitly.
+If `DIREXIO_AGENT_PLATFORM=auto` cannot identify a single supported runtime, or if the detected host runtime is not a supported connect agent, set `DIREXIO_CC_CONNECT_AGENT` explicitly.
 
 Check status:
 
@@ -104,8 +105,8 @@ Manual install:
 
 ```bash
 npm install -g @direxio/connent
-direxio-connect daemon install --config ~/.direxio/nodes/<service_id>/cc-connect/config.toml --force
-direxio-connect daemon status
+direxio-connect daemon install --config ~/.direxio/nodes/<service_id>/cc-connect/config.toml --service-name <service_id> --force
+direxio-connect daemon status --service-name <service_id>
 ```
 
 Voice input is supported when an STT provider key is available. Set `DIREXIO_SPEECH_API_KEY` or provider-specific variables such as `DIREXIO_SPEECH_QWEN_API_KEY`; S6 will then write `[speech] enabled = true` into `cc-connect/config.toml`.

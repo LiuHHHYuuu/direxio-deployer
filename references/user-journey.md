@@ -61,11 +61,11 @@ When all phases complete, report:
 - persisted `DIREXIO_DOMAIN`, `DIREXIO_AGENT_TOKEN`, `DIREXIO_AGENT_ROOM_ID`, `DIREXIO_AGENT_NODE_ID`
 - `cc_connect_config`, `cc_connect_matrix_user`, `cc_connect_matrix_device`, and `cc_connect_matrix_homeserver`
 - install policy/mode/status from `DIREXIO_AGENT_INSTALL` and `DIREXIO_AGENT_INSTALL_MODE`
-- manual command: `npm install -g @direxio/connent && direxio-connect daemon install --config <cc_connect_config> --force`
+- manual command: `npm install -g @direxio/connent && direxio-connect daemon install --config <cc_connect_config> --service-name <service_id> --force`
 - region, instance ID, public IP, and `state.json` path
 - SSH command
 - destroy command
 
-After delivery, verify the local bridge by checking `direxio-connect daemon status` when installed, or by running the recorded `agent_install_command` if the policy was `recommend`.
+After delivery, verify the local bridge by checking `direxio-connect daemon status --service-name <service_id>` when installed, or by running the recorded `agent_install_command` if the policy was `recommend`.
 
 Destroying AWS resources does not remove DNS records or registered domains.

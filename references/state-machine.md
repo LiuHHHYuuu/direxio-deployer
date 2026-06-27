@@ -31,7 +31,7 @@
 - 环境文件: `~/.direxio/nodes/<service_id>/env`
 - cc-connect 配置: `~/.direxio/nodes/<service_id>/cc-connect/config.toml`
 - Matrix bridge 用户: `@agent:<server>`
-- 安装命令: `npm install -g @direxio/connent && direxio-connect daemon install --config <config> --force`
+- 安装命令: `npm install -g @direxio/connent && direxio-connect daemon install --config <config> --service-name <service_id> --force`
 - AWS 信息: region、instance id、Elastic IP、SSH 命令、state.json、destroy 命令
 
 ## 常见阻断

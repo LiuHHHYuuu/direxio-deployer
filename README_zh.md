@@ -21,8 +21,9 @@
 - S6 会拒绝 `!agent:<domain>` 这类旧伪房间，只接受 message-server 创建的真实 Matrix `agent_room_id`。
 - S6 会通过 `agent.matrix_session.create` 创建 `@agent:<server>` Matrix session，写入 Matrix-only `cc-connect/config.toml`，并把 bridge 限制在当前 `agent_room_id`。
 - `DIREXIO_CC_CONNECT_AGENT` 用来选择本地 `direxio-connect` agent 类型。支持值与 connent/connect 一致：`acp`、`antigravity`、`claudecode`、`codex`、`copilot`、`cursor`、`devin`、`gemini`、`iflow`、`kimi`、`opencode`、`pi`、`qoder`、`reasonix`、`tmux`。
+- `DIREXIO_AGENT_PLATFORM` 表示正在执行部署 skill 的宿主运行时；`DIREXIO_CC_CONNECT_AGENT` 表示 `direxio-connect` 要启动的本地 agent 后端。如果宿主运行时是 Hermes/OpenClaw，或者不是 connect 支持的 agent，必须显式设置 `DIREXIO_CC_CONNECT_AGENT`。
 - 当本地 agent 可执行文件不能从 PATH 找到时，设置 `DIREXIO_CC_CONNECT_AGENT_CMD` 或 `DIREXIO_<AGENT>_COMMAND`。Codex Desktop 在 Windows 下也可以继续使用 `DIREXIO_CODEX_COMMAND`。
-- `DIREXIO_AGENT_INSTALL=auto` 会安装 `@direxio/connent` 并执行 `direxio-connect daemon install --config <config> --force`。默认 `recommend` 只记录并打印命令。
+- `DIREXIO_AGENT_INSTALL=auto` 会安装 `@direxio/connent` 并执行 `direxio-connect daemon install --config <config> --service-name <service_id> --force`。默认 `recommend` 只记录并打印命令。自动安装只有在 `direxio-connect daemon status --service-name <service_id>` 返回 `Status: Running` 时才记为 installed，否则 S6 会记录 `agent_install_status=install_failed`。
 
 ## 最小命令
 
@@ -67,7 +68,7 @@ bash scripts/orchestrate.sh
 ```
 
 可选安装模式：`recommended`、`cc-connect`。
-如果 `DIREXIO_AGENT_PLATFORM=auto` 无法唯一识别当前运行时，显式设置 `DIREXIO_CC_CONNECT_AGENT`。
+如果 `DIREXIO_AGENT_PLATFORM=auto` 无法唯一识别当前运行时，或识别出的宿主运行时不是 connect 支持的 agent，显式设置 `DIREXIO_CC_CONNECT_AGENT`。
 
 查看状态：
 
@@ -82,7 +83,7 @@ DOMAIN=<domain> bash scripts/orchestrate.sh status
 DOMAIN=<domain> bash scripts/destroy.sh
 ```
 
-销毁时只会在 `direxio-connect daemon status` 返回的 `WorkDir` 等于当前服务的
+销毁时只会在 `direxio-connect daemon status --service-name <service_id>` 返回的 `WorkDir` 等于当前服务的
 `~/.direxio/nodes/<service_id>/cc-connect` 目录时停止本地 daemon，然后删除该
 service 目录。
 
@@ -102,8 +103,8 @@ cc-connect/matrix-session.json
 
 ```bash
 npm install -g @direxio/connent
-direxio-connect daemon install --config ~/.direxio/nodes/<service_id>/cc-connect/config.toml --force
-direxio-connect daemon status
+direxio-connect daemon install --config ~/.direxio/nodes/<service_id>/cc-connect/config.toml --service-name <service_id> --force
+direxio-connect daemon status --service-name <service_id>
 ```
 
 语音输入在配置 STT provider key 后可用。设置 `DIREXIO_SPEECH_API_KEY` 或 `DIREXIO_SPEECH_QWEN_API_KEY` 等 provider 专用变量后，S6 会在 `cc-connect/config.toml` 写入 `[speech] enabled = true`。

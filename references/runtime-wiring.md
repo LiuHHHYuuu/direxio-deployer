@@ -89,12 +89,12 @@ DIREXIO_SPEECH_LANGUAGE=zh
 Defaults:
 
 - `DIREXIO_CC_CONNECT_AGENT` is the preferred explicit selector. It accepts every connent/connect agent: `acp`, `antigravity`, `claudecode`, `codex`, `copilot`, `cursor`, `devin`, `gemini`, `iflow`, `kimi`, `opencode`, `pi`, `qoder`, `reasonix`, and `tmux`.
-- `DIREXIO_AGENT_PLATFORM=auto` detects the local agent runtime and maps it to a `direxio-connect` agent type only when it can identify one unambiguously.
+- `DIREXIO_AGENT_PLATFORM=auto` detects the local agent runtime and maps it to a `direxio-connect` agent type only when it can identify one unambiguously. `DIREXIO_AGENT_PLATFORM` is the host runtime; `DIREXIO_CC_CONNECT_AGENT` is the bridge backend. If the host runtime is Hermes/OpenClaw or another runtime that is not a connect agent, set `DIREXIO_CC_CONNECT_AGENT` explicitly.
 - `DIREXIO_LOCAL_PATH_STYLE=windows` writes Windows-compatible `data_dir`, `work_dir`, config paths, and install commands. `scripts/orchestrate.ps1` sets this automatically.
 - `DIREXIO_CC_CONNECT_AGENT_CMD` writes `cmd = "<path>"` into `[projects.agent.options]`. Agent-specific forms such as `DIREXIO_CODEX_COMMAND`, `DIREXIO_CLAUDE_CODE_COMMAND`, `DIREXIO_GEMINI_COMMAND`, `DIREXIO_OPENCODE_COMMAND`, and `DIREXIO_QODERCLI_COMMAND` are also accepted.
 - `DIREXIO_CC_CONNECT_AGENT_OPTIONS_TOML` appends agent-specific options under `[projects.agent.options]`; use it for agents with required non-command options such as `reasonix` (`serve_url`) or `tmux` (`session`).
 - `DIREXIO_AGENT_INSTALL=recommend` prints and records the command only.
-- `DIREXIO_AGENT_INSTALL=auto` runs `npm install -g @direxio/connent` and then installs the `direxio-connect` daemon with the generated config.
+- `DIREXIO_AGENT_INSTALL=auto` runs `npm install -g @direxio/connent` and then installs the `direxio-connect` daemon with the generated config and `--service-name <service_id>`. It is recorded as installed only when `direxio-connect daemon status --service-name <service_id>` reports `Status: Running`; otherwise S6 records `agent_install_status=install_failed`.
 - `DIREXIO_AGENT_INSTALL_MODE=recommended` maps every supported local runtime to `cc-connect`.
 - Speech defaults to `DIREXIO_SPEECH_PROVIDER=openai` and `DIREXIO_SPEECH_LANGUAGE=zh`. Provider-specific keys are also accepted: `DIREXIO_SPEECH_OPENAI_API_KEY` or `OPENAI_API_KEY`, `DIREXIO_SPEECH_GROQ_API_KEY` or `GROQ_API_KEY`, `DIREXIO_SPEECH_QWEN_API_KEY` or `DASHSCOPE_API_KEY`, and `DIREXIO_SPEECH_GEMINI_API_KEY`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY`. Set `DIREXIO_SPEECH_ENABLED=false` to suppress speech config generation even when a key exists.
 
@@ -102,8 +102,8 @@ Manual command:
 
 ```bash
 npm install -g @direxio/connent
-direxio-connect daemon install --config ~/.direxio/nodes/<service_id>/cc-connect/config.toml --force
-direxio-connect daemon status
+direxio-connect daemon install --config ~/.direxio/nodes/<service_id>/cc-connect/config.toml --service-name <service_id> --force
+direxio-connect daemon status --service-name <service_id>
 ```
 
 Source fallback:
@@ -112,7 +112,7 @@ Source fallback:
 git clone https://github.com/YingSuiAI/connect.git
 cd connect
 make build AGENTS=<cc-connect-agent> PLATFORMS_INCLUDE=matrix
-./direxio-connect daemon install --config ~/.direxio/nodes/<service_id>/cc-connect/config.toml --force
+./direxio-connect daemon install --config ~/.direxio/nodes/<service_id>/cc-connect/config.toml --service-name <service_id> --force
 ```
 
 ## State Fields

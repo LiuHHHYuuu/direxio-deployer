@@ -69,8 +69,8 @@ The npm path is the default local install:
 
 ```bash
 npm install -g @direxio/connent
-direxio-connect daemon install --config "$HOME/.direxio/nodes/<service_id>/cc-connect/config.toml" --force
-direxio-connect daemon status
+direxio-connect daemon install --config "$HOME/.direxio/nodes/<service_id>/cc-connect/config.toml" --service-name <service_id> --force
+direxio-connect daemon status --service-name <service_id>
 ```
 
 If the command is not found after install, check the npm global bin directory:

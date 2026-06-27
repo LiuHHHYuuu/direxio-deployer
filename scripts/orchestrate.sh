@@ -154,13 +154,14 @@ cmd_status() {
 # Delivery summary.
 print_delivery() {
   local domain asurl password keyfile pubip iid region statejson envfile agent_room_id runtime install_policy install_mode install_status install_command
-  local agent_node_id agent_service_dir agent_cred cc_config cc_binary cc_agent cc_user cc_pkg
+  local agent_node_id agent_service_id agent_service_dir agent_cred cc_config cc_binary cc_agent cc_user cc_pkg
   domain=$(state_get domain); asurl=$(state_get as_url)
   password=$(state_get password)
   keyfile=$(res_get key_file); pubip=$(res_get public_ip)
   iid=$(res_get instance_id); region=$(state_get region); statejson="$STATE_JSON"
   envfile=$(state_get agent_env_file)
   agent_node_id=$(state_get agent_node_id)
+  agent_service_id=$(state_get agent_service_id)
   agent_service_dir=$(state_get agent_service_dir)
   agent_cred=$(state_get agent_credentials_file)
   agent_room_id=$(state_get agent_room_id)
@@ -179,6 +180,7 @@ print_delivery() {
   echo "  IM URL       : ${asurl:-https://$domain}"
   echo "  password     : $password   <- paste into the IM login form"
   echo "  agent node   : ${agent_node_id:-default}"
+  echo "  service id   : ${agent_service_id:-not recorded}"
   echo "  service dir  : ${agent_service_dir:-not recorded}"
   echo "  tokens       : password, access_token, and agent_token written to ${agent_cred:-~/.direxio/nodes/<service_id>/credentials.json}"
   echo "  agent room   : ${agent_room_id:-written to credentials.json}"
@@ -187,7 +189,7 @@ print_delivery() {
   echo "  agent runtime: ${runtime:-unknown}"
   echo "  install mode : policy=${install_policy:-recommend} mode=${install_mode:-cc-connect} agent=${cc_agent:-codex} status=${install_status:-recommend}"
   [ -n "$install_command" ] && echo "  install cmd  : $install_command"
-  echo "  daemon       : ${cc_binary:-direxio-connect} daemon status"
+  echo "  daemon       : ${cc_binary:-direxio-connect} daemon status --service-name ${agent_service_id:-cc-connect}"
   echo "  env vars     : DIREXIO_DOMAIN, DIREXIO_AGENT_TOKEN, DIREXIO_AGENT_ROOM_ID persisted${envfile:+ via $envfile}"
   echo "  AWS region   : $region"
   echo "  EC2          : $iid ($pubip)"

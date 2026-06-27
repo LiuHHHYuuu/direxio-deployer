@@ -29,7 +29,7 @@ From the repository root:
 DOMAIN=__DOMAIN__ bash scripts/destroy.sh
 ```
 
-Destroy stops the local `direxio-connect` daemon only when `direxio-connect daemon status` reports a `WorkDir` matching the current service directory, `~/.direxio/nodes/<service_id>/cc-connect`. It then terminates the recorded EC2 instance, releases the Elastic IP, deletes the security group and key pair, and removes the corresponding local service directory under `~/.direxio/nodes/<service_id>`. This prevents stale credentials and `state.json` files from being treated as active deployments later.
+Destroy stops the local `direxio-connect` daemon only when `direxio-connect daemon status --service-name <service_id>` reports a `WorkDir` matching the current service directory, `~/.direxio/nodes/<service_id>/cc-connect`. It then terminates the recorded EC2 instance, releases the Elastic IP, deletes the security group and key pair, and removes the corresponding local service directory under `~/.direxio/nodes/<service_id>`. This prevents stale credentials and `state.json` files from being treated as active deployments later.
 
 Use `P2P_KEEP_WORKDIR=1 DOMAIN=__DOMAIN__ bash scripts/destroy.sh` only when preserving local state files for debugging; if used, report that the service directory still exists.
 

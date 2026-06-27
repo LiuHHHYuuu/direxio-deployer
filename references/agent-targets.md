@@ -35,7 +35,12 @@ The bridge agent type is selected independently from the host operating system. 
 acp antigravity claudecode codex copilot cursor devin gemini iflow kimi opencode pi qoder reasonix tmux
 ```
 
-`DIREXIO_AGENT_PLATFORM=auto` is a convenience detector only. If detection is ambiguous or the detected host runtime is not a cc-connect agent, set `DIREXIO_CC_CONNECT_AGENT` explicitly.
+`DIREXIO_AGENT_PLATFORM=auto` is a convenience detector only. If detection is ambiguous or the detected host runtime is not a cc-connect agent, set `DIREXIO_CC_CONNECT_AGENT` explicitly. For example, a Hermes-hosted deploy should use a supported bridge backend such as:
+
+```bash
+DIREXIO_AGENT_PLATFORM=hermes
+DIREXIO_CC_CONNECT_AGENT=codex
+```
 
 S6 writes service-specific files to `~/.direxio/nodes/<service_id>/`, where `service_id` is derived from the deployed domain:
 
@@ -87,7 +92,7 @@ The `[speech]` block is present only when S6 finds a speech-to-text API key from
 
 - `DIREXIO_AGENT_INSTALL=skip`: write credentials/env and cc-connect config only.
 - `DIREXIO_AGENT_INSTALL=recommend`: write files, record state, and print the install command.
-- `DIREXIO_AGENT_INSTALL=auto`: run `npm install -g @direxio/connent` and then `direxio-connect daemon install --config ~/.direxio/nodes/<service_id>/cc-connect/config.toml --force`.
+- `DIREXIO_AGENT_INSTALL=auto`: run `npm install -g @direxio/connent` and then `direxio-connect daemon install --config ~/.direxio/nodes/<service_id>/cc-connect/config.toml --service-name <service_id> --force`. S6 records this as installed only after `direxio-connect daemon status --service-name <service_id>` reports `Status: Running`; otherwise it records `agent_install_status=install_failed`.
 
 Prefer `DIREXIO_CC_CONNECT_AGENT=<agent>` to choose the local agent that `direxio-connect` should run. Keep `DIREXIO_AGENT_PLATFORM=<runtime>` for auto-detection overrides and legacy host-runtime naming. Use `DIREXIO_AGENT_INSTALL_MODE=cc-connect` only when overriding the default `recommended` mapping explicitly.
 Use `DIREXIO_CC_CONNECT_AGENT_OPTIONS_TOML` for agent-specific options that cannot be represented by `work_dir` or `cmd`; for example `reasonix` requires `serve_url`, `tmux` requires `session`, and generic `acp` requires a command when `DIREXIO_CC_CONNECT_AGENT_CMD` is not enough.
