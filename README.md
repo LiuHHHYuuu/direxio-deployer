@@ -16,10 +16,11 @@
 - Deploy only to a real, long-lived domain.
 - Matrix `server_name` is identity; changing it later is effectively a new homeserver.
 - AWS resources cost money; the user must explicitly confirm before deployment.
-- User-managed DNS mode pauses after Elastic IP creation until the user updates the A record.
+- Route53 mode reuses or creates the hosted zone, records NS nameservers, upserts the A record, and waits for DNS to resolve.
+- User-managed DNS mode is a fallback when no DNS provider automation is available; it pauses after Elastic IP creation until the A record points to the new IP.
 - The backend image is `direxio/message-server`; Matrix and P2P APIs share port 8008.
 - Cloud init generates `P2P_PORTAL_PASSWORD`; `init-tokens.sh` calls `portal.bootstrap` and creates a real Matrix agent room if the backend credentials file does not already include one.
-- Treat synced `password` and owner `access_token` values as one-time/volatile credentials. Pull the current server `/opt/p2p/bootstrap.json` before showing a login password or using an owner token for API calls.
+- Treat synced `password` and owner `access_token` values as one-time/volatile credentials. The backend field `password` is the user-facing eight-digit app initialization code. Pull the current server `/opt/p2p/bootstrap.json` before showing that code or using an owner token for API calls.
 - S6 rejects legacy pseudo agent rooms such as `!agent:<domain>` and requires the real Matrix `agent_room_id` created by message-server.
 - S6 creates an `@agent:<server>` Matrix session through `agent.matrix_session.create`, writes a Matrix-only `cc-connect/config.toml`, and restricts the bridge to the current `agent_room_id`.
 - S6 writes MCP client snippets under `~/.direxio/nodes/<service_id>/mcp/`. They point `direxio-mcp` at the same service-scoped `credentials.json` by `DIREXIO_CREDENTIALS_FILE`; cc-connect still uses its direct Matrix config.
@@ -30,7 +31,23 @@
 
 ## Minimal Command
 
+Import and verify a temporary non-root AWS deployment profile from an AWS CSV:
+
+```bash
+bash scripts/aws-credentials.sh import-csv /path/to/accessKeys.csv direxio-deployer us-east-1
+export AWS_PROFILE=direxio-deployer
+bash scripts/aws-credentials.sh verify direxio-deployer
+```
+
 Run from the repository root:
+
+```bash
+bash scripts/pricing-estimate.sh \
+  --region us-east-1 \
+  --instance-type t3.small \
+  --disk-gb 8 \
+  --domain-mode user
+```
 
 ```bash
 AWS_DEFAULT_REGION=us-east-1 \
@@ -89,6 +106,20 @@ DOMAIN=<domain> bash scripts/destroy.sh
 Destroy stops the local `direxio-connect` daemon only when its reported `WorkDir`
 matches the current service's `~/.direxio/nodes/<service_id>/cc-connect`
 directory, then removes that service directory.
+
+Update an existing node without deleting data:
+
+```bash
+DOMAIN=<domain> MESSAGE_SERVER_IMAGE=direxio/message-server:latest bash scripts/update.sh
+P2P_EXISTING_STATE_ACTION=continue DOMAIN=<domain> bash scripts/orchestrate.sh
+```
+
+Reset application data while preserving EC2, DNS, fixed IP, and Caddy TLS:
+
+```bash
+DIREXIO_RESET_APP_DATA_CONFIRM=1 DOMAIN=<domain> bash scripts/reset-app-data.sh
+P2P_EXISTING_STATE_ACTION=continue DOMAIN=<domain> bash scripts/orchestrate.sh
+```
 
 ## Local Bridge
 

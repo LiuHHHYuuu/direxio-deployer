@@ -19,7 +19,13 @@ printf ' %q' "$@" >> "$CALLS"
 printf '\n' >> "$CALLS"
 
 case "${1:-} ${2:-}" in
-  "sts get-caller-identity") exit 0 ;;
+  "sts get-caller-identity")
+    case "$*" in
+      *"--query Arn"*) printf 'arn:aws:iam::123456789012:user/DirexioDeployer-Test\n' ;;
+      *"--query Account"*) printf '123456789012\n' ;;
+      *) printf '{"Account":"123456789012","Arn":"arn:aws:iam::123456789012:user/DirexioDeployer-Test"}\n' ;;
+    esac
+    ;;
   "ec2 terminate-instances") exit 0 ;;
   "ec2 wait") exit 0 ;;
   "ec2 release-address") exit 0 ;;
