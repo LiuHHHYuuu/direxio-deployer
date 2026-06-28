@@ -155,7 +155,7 @@ fi
 
 install_command=$(_agent_install_command "direxio-connect" "$HOME/.direxio/nodes/im.example.test/cc-connect/config.toml" "im.example.test")
 case "$install_command" in
-  *"npm install -g"*"@direxio/connent@1.3.7"*"direxio-connect"*"daemon install"*"--config"*"im.example.test/cc-connect/config.toml"*"--service-name"*"im.example.test"*"--force"*) ;;
+  *"npm install -g"*"@direxio/connent@1.3.8"*"direxio-connect"*"daemon install"*"--config"*"im.example.test/cc-connect/config.toml"*"--service-name"*"im.example.test"*"--force"*) ;;
   *)
     echo "install command did not include expected cc-connect daemon flags: $install_command" >&2
     exit 1
@@ -247,9 +247,9 @@ grep -q 'model = "whisper-test"' "$speech_config_path"
 [ "$(DIREXIO_QODERCLI_COMMAND=/opt/qoder/qodercli _cc_connect_agent_command qoder)" = "/opt/qoder/qodercli" ]
 [ "$(DIREXIO_CC_CONNECT_AGENT_CMD=/custom/agent _cc_connect_agent_command codex)" = "/custom/agent" ]
 [ "$(_cc_connect_agent_command acp openclaw)" = "openclaw" ]
-[ "$(_cc_connect_agent_command acp hermes)" = "hermes" ]
+[ "$(_cc_connect_agent_command acp hermes)" = "direxio-connect" ]
 [ "$(DIREXIO_OPENCLAW_COMMAND=/opt/openclaw/bin/openclaw _cc_connect_agent_command acp openclaw)" = "/opt/openclaw/bin/openclaw" ]
-[ "$(DIREXIO_HERMES_COMMAND=/opt/hermes/bin/hermes _cc_connect_agent_command acp hermes)" = "/opt/hermes/bin/hermes" ]
+[ "$(DIREXIO_HERMES_COMMAND=/opt/hermes/bin/hermes _cc_connect_agent_command acp hermes)" = "direxio-connect" ]
 
 cmd_config_path="$tmp/cc-connect/config-with-cmd.toml"
 _write_cc_connect_config "$cmd_config_path" "$tmp/cc-connect/data-cmd" "codex-node" "codex" "$tmp/workspace" "https://im.example.test" "matrix-token" "@agent:im.example.test" "!agents-real:im.example.test" "@owner:im.example.test" "/opt/codex/bin/codex"
@@ -317,8 +317,14 @@ openclaw_token_options=$(DIREXIO_LOCAL_PATH_STYLE=windows DIREXIO_OPENCLAW_ACP_T
 [[ "$openclaw_token_options" == *'args = ["acp", "--token-file", "C:/Users/alice/.openclaw/token.json"]'* ]]
 
 hermes_options=$(_cc_connect_agent_options_toml hermes acp)
-[[ "$hermes_options" == *'args = ["acp"]'* ]]
+[[ "$hermes_options" == *'args = ["hermes-acp-adapter", "--", "hermes", "acp"]'* ]]
 [[ "$hermes_options" == *'display_name = "Hermes ACP"'* ]]
+
+hermes_custom_command_options=$(DIREXIO_HERMES_COMMAND=/opt/hermes/bin/hermes _cc_connect_agent_options_toml hermes acp)
+[[ "$hermes_custom_command_options" == *'args = ["hermes-acp-adapter", "--", "/opt/hermes/bin/hermes", "acp"]'* ]]
+
+hermes_custom_args_options=$(DIREXIO_HERMES_ACP_ARGS_TOML='["acp", "--profile", "direxio"]' _cc_connect_agent_options_toml hermes acp)
+[[ "$hermes_custom_args_options" == *'args = ["hermes-acp-adapter", "--", "hermes", "acp", "--profile", "direxio"]'* ]]
 
 openclaw_config_path="$tmp/cc-connect/config-openclaw.toml"
 _write_cc_connect_config "$openclaw_config_path" "$tmp/cc-connect/data-openclaw" "openclaw-node" "$(_cc_connect_agent_type openclaw)" "$tmp/workspace" "https://im.example.test" "matrix-token" "@agent:im.example.test" "!agents-real:im.example.test" "@owner:im.example.test" "$(_cc_connect_agent_command acp openclaw)" "$(_cc_connect_agent_options_toml openclaw acp)"
@@ -330,8 +336,8 @@ grep -q 'display_name = "OpenClaw ACP"' "$openclaw_config_path"
 hermes_config_path="$tmp/cc-connect/config-hermes.toml"
 _write_cc_connect_config "$hermes_config_path" "$tmp/cc-connect/data-hermes" "hermes-node" "$(_cc_connect_agent_type hermes)" "$tmp/workspace" "https://im.example.test" "matrix-token" "@agent:im.example.test" "!agents-real:im.example.test" "@owner:im.example.test" "$(_cc_connect_agent_command acp hermes)" "$(_cc_connect_agent_options_toml hermes acp)"
 grep -q 'type = "acp"' "$hermes_config_path"
-grep -q 'cmd = "hermes"' "$hermes_config_path"
-grep -q 'args = \["acp"\]' "$hermes_config_path"
+grep -q 'cmd = "direxio-connect"' "$hermes_config_path"
+grep -q 'args = \["hermes-acp-adapter", "--", "hermes", "acp"\]' "$hermes_config_path"
 grep -q 'display_name = "Hermes ACP"' "$hermes_config_path"
 
 guidance=$(
@@ -345,7 +351,7 @@ guidance=$(
 [[ "$guidance" == *"cc-connect config"* ]]
 [[ "$guidance" == *"/opt/codex/bin/codex"* ]]
 [[ "$guidance" == *"daemon install"* ]]
-[[ "$guidance" == *"@direxio/connent@1.3.7"* || "$install_command" == *"@direxio/connent@1.3.7"* ]]
+[[ "$guidance" == *"@direxio/connent@1.3.8"* || "$install_command" == *"@direxio/connent@1.3.8"* ]]
 [[ "$guidance" == *"type = \"matrix\""* || "$guidance" == *"cc-connect will use Matrix"* ]]
 bad_credentials_env_name="DIREXIO_CREDENTIALS""_FILE"
 if [[ "$guidance" == *"$bad_credentials_env_name"* ]]; then

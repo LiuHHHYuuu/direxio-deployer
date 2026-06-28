@@ -410,6 +410,10 @@ _cc_connect_agent_command() {
     printf '%s\n' "$DIREXIO_CC_CONNECT_AGENT_CMD"
     return 0
   fi
+  if [ "$runtime" = "hermes" ] && [ "$agent" = "acp" ]; then
+    _local_connect_path "${DIREXIO_HERMES_ACP_ADAPTER_COMMAND:-${DIREXIO_CC_CONNECT_BIN:-direxio-connect}}"
+    return 0
+  fi
   for raw_key in $(_cc_connect_runtime_command_aliases "$runtime") "$agent" $(_cc_connect_agent_command_aliases "$agent"); do
     var="DIREXIO_$(printf '%s' "$raw_key" | tr '[:lower:]-' '[:upper:]_')_COMMAND"
     value=$(printenv "$var" 2>/dev/null || true)
@@ -444,7 +448,7 @@ _cc_connect_repo() {
 }
 
 _cc_connect_npm_package() {
-  printf '%s\n' "${DIREXIO_CC_CONNECT_NPM_PACKAGE:-@direxio/connent@1.3.7}"
+  printf '%s\n' "${DIREXIO_CC_CONNECT_NPM_PACKAGE:-@direxio/connent@1.3.8}"
 }
 
 _cc_connect_ref() {
@@ -564,11 +568,14 @@ _openclaw_acp_args_toml() {
 }
 
 _hermes_acp_args_toml() {
+  local hermes_cmd
+  hermes_cmd=${DIREXIO_HERMES_COMMAND:-hermes}
+  hermes_cmd=$(_local_connect_path "$hermes_cmd")
   if [ -n "${DIREXIO_HERMES_ACP_ARGS_TOML:-}" ]; then
-    printf '%s\n' "$DIREXIO_HERMES_ACP_ARGS_TOML"
+    _toml_array_prepend "$DIREXIO_HERMES_ACP_ARGS_TOML" hermes-acp-adapter -- "$hermes_cmd"
     return 0
   fi
-  _toml_array acp
+  _toml_array hermes-acp-adapter -- "$hermes_cmd" acp
 }
 
 _toml_array() {
@@ -583,6 +590,18 @@ _toml_array() {
     first=0
   done
   printf ']\n'
+}
+
+_toml_array_prepend() {
+  local suffix_toml=$1 prefix_toml suffix_inner
+  shift
+  prefix_toml=$(_toml_array "$@")
+  suffix_inner=$(printf '%s' "$suffix_toml" | sed -E 's/^[[:space:]]*\[[[:space:]]*//; s/[[:space:]]*\][[:space:]]*$//')
+  if [ -z "$suffix_inner" ]; then
+    printf '%s\n' "$prefix_toml"
+    return 0
+  fi
+  printf '%s, %s]\n' "${prefix_toml%]}" "$suffix_inner"
 }
 
 _toml_has_key() {
