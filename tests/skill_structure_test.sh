@@ -56,9 +56,9 @@ grep -q 'DIREXIO_AGENT_ROOM_ID' scripts/phases/s6_wire_local.sh
 grep -q 'DIREXIO_CC_CONNECT_REPO' scripts/phases/s6_wire_local.sh
 grep -q 'DIREXIO_LOCAL_PATH_STYLE' scripts/phases/s6_wire_local.sh
 grep -q 'DIREXIO_CREDENTIALS_FILE' scripts/phases/s6_wire_local.sh
-grep -q '@direxio/local-mcp' scripts/phases/s6_wire_local.sh
+grep -q 'direxio-mcp' scripts/phases/s6_wire_local.sh
 grep -q 'PLATFORMS_INCLUDE=matrix' scripts/phases/s6_wire_local.sh
-grep -q 'YingSuiAI/connect.git' scripts/phases/s6_wire_local.sh
+grep -q 'YingSuiAI/direxio-connect.git' scripts/phases/s6_wire_local.sh
 grep -q 'DIREXIO_CC_CONNECT_AGENT' scripts/phases/s6_wire_local.sh
 grep -q 'orchestrate.ps1' README.md
 grep -q 'cc-connect' SKILL.md
@@ -71,12 +71,12 @@ fi
 grep -q '简体中文](README_zh.md)' README.md
 grep -q '通用 Agent Skill' README_zh.md
 grep -q 'PROJECT_ROOT/.cursor/skills/direxio-deployer' references/agent-targets.md
-grep -q '@direxio/connent' references/agent-targets.md
+grep -q 'direxio-connent' references/agent-targets.md
 grep -q 'direxio-connect daemon install' references/agent-targets.md
 grep -q 'acp antigravity claudecode codex copilot cursor devin gemini iflow kimi opencode pi qoder reasonix tmux' references/agent-targets.md
 
 if grep -R 'YingSuiAI/cc-connect\|github.com/YingSuiAI/cc-connect' SKILL.md scripts README.md README_zh.md references AGENTS.md >/dev/null; then
-  echo "current docs/scripts must use YingSuiAI/connect, not the old YingSuiAI/cc-connect repository" >&2
+  echo "current docs/scripts must use YingSuiAI/direxio-connect, not the old YingSuiAI/cc-connect repository" >&2
   exit 1
 fi
 
@@ -110,8 +110,13 @@ if grep -RE 'fixed order.*\.codex.*\.hermes|\.codex.*checked before.*\.hermes' S
   exit 1
 fi
 
-if grep -R '@direxio/local-mcp@0\.1\.[0-5]' SKILL.md references scripts README.md README_zh.md >/dev/null; then
-  echo "published docs/scripts must not reference stale @direxio/local-mcp versions" >&2
+if grep -R 'direxio-mcp@0\.1\.[0-9]' SKILL.md references scripts README.md README_zh.md >/dev/null; then
+  echo "published docs/scripts must not reference stale direxio-mcp versions" >&2
+  exit 1
+fi
+
+if grep -R 'direxio-connent@1\.' SKILL.md references scripts README.md README_zh.md >/dev/null; then
+  echo "published docs/scripts must not pin direxio-connent by default" >&2
   exit 1
 fi
 
@@ -165,7 +170,8 @@ fi
 grep -q 'eight-digit app initialization code' SKILL.md
 grep -q 'S7 green is not the final product-complete state' SKILL.md
 grep -q 'non-polluting' SKILL.md
-grep -q '@direxio/local-mcp@0.1.6' SKILL.md
+grep -q 'direxio-mcp@latest' SKILL.md
+grep -q 'direxio-connent@latest' SKILL.md
 grep -q 'DirexioDeployer' SKILL.md
 grep -q 'AdministratorAccess' SKILL.md
 grep -qi 'root access keys are allowed' SKILL.md

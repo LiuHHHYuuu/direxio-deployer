@@ -58,6 +58,35 @@ Prefer the `ssh`/`scp` that belongs to the same POSIX environment used for
 the `.pem` look too open, even when Git/MSYS OpenSSH accepts it. If using Windows
 OpenSSH directly, fix the key ACL instead of disabling SSH checks.
 
+## Local Polling Can Hang While The Server Is Healthy
+
+Symptom:
+
+- `state.json` stays at `S4_BOOTSTRAP_STACK=polling`.
+- `https://<domain>/healthz` returns `{"status":"ok"}` from another shell.
+- A leftover local `curl -skf https://<domain>/healthz` or SSH child process is
+  still running after the agent/operator interrupted the deployment turn.
+
+Cause:
+
+The cloud side may have completed successfully, but a local network call can
+hang long enough that the state machine never records the successful phase. This
+is especially confusing on Windows when proxy settings, direct TCP reachability,
+or interrupted terminal sessions leave child processes behind.
+
+Fix now in ops:
+
+- S4 health checks use per-attempt curl timeouts:
+  `HEALTH_CURL_CONNECT_TIMEOUT` and `HEALTH_CURL_MAX_TIME`.
+- S5 SSH reads use non-interactive SSH options plus `SSH_COMMAND_TIMEOUT` when
+  the local `timeout` command is available.
+- If a deployment was interrupted, inspect `scripts/orchestrate.sh status`,
+  stop only leftover local `orchestrate.sh`/`curl`/`ssh` children for that run,
+  and resume with `P2P_EXISTING_STATE_ACTION=continue`.
+- If SSH to the instance is blocked but AWS access still works, attach a
+  temporary SSM role and use SSM Run Command to read `/opt/p2p/bootstrap.json`
+  without printing secrets. Remove or audit the temporary role after recovery.
+
 ## DNS And State Handling
 
 For `DOMAIN_MODE=user`, S3 intentionally stops after allocating the EIP and waits

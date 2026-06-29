@@ -328,7 +328,7 @@ print_delivery() {
   echo "  service dir  : ${agent_service_dir:-not recorded}"
   echo "  credentials  : init code/password field, access_token, and agent_token written to ${agent_cred:-~/.direxio/nodes/<service_id>/credentials.json}"
   echo "  agent room   : ${agent_room_id:-written to credentials.json}"
-  echo "  cc-connect   : package=${cc_pkg:-@direxio/connent@1.3.10} config=${cc_config:-not recorded} command=${cc_binary:-direxio-connect}"
+  echo "  cc-connect   : package=${cc_pkg:-direxio-connent@latest} config=${cc_config:-not recorded} command=${cc_binary:-direxio-connect}"
   echo "  matrix user  : ${cc_user:-created during S6}"
   echo "  agent runtime: ${runtime:-unknown}"
   echo "  install mode : policy=${install_policy:-recommend} mode=${install_mode:-cc-connect} agent=${cc_agent:-codex} status=${install_status:-recommend}"

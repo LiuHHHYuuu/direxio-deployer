@@ -68,8 +68,22 @@ _extract_output_tokens() {
 
 _read_remote_bootstrap() {
   local keyfile=$1 pubip=$2 out=$3
-  ssh -i "$keyfile" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
-    ubuntu@"$pubip" "sudo test -s /opt/p2p/bootstrap.json && sudo cat /opt/p2p/bootstrap.json" > "$out" 2>/dev/null
+  local ssh_args cmd timeout_seconds
+  ssh_args=(
+    -i "$keyfile"
+    -o StrictHostKeyChecking=accept-new
+    -o ConnectTimeout="${SSH_CONNECT_TIMEOUT:-10}"
+    -o BatchMode=yes
+    -o ServerAliveInterval="${SSH_SERVER_ALIVE_INTERVAL:-5}"
+    -o ServerAliveCountMax="${SSH_SERVER_ALIVE_COUNT_MAX:-2}"
+  )
+  cmd=(ssh "${ssh_args[@]}" ubuntu@"$pubip" "sudo test -s /opt/p2p/bootstrap.json && sudo cat /opt/p2p/bootstrap.json")
+  timeout_seconds=${SSH_COMMAND_TIMEOUT:-30}
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$timeout_seconds" "${cmd[@]}" > "$out" 2>/dev/null
+  else
+    "${cmd[@]}" > "$out" 2>/dev/null
+  fi
 }
 
 _normalize_bootstrap_output() {

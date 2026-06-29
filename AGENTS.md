@@ -6,7 +6,7 @@
 
 - Deploy, resume, verify, destroy, and locally wire a production Direxio message server.
 - Treat `SKILL.md` as the agent-facing runbook and `scripts/` as implementation details behind stable entrypoints.
-- The supported local conversation bridge is `direxio-connect` from `@direxio/connent` or `YingSuiAI/connect`.
+- The supported local conversation bridge is `direxio-connect` from `direxio-connent` or `YingSuiAI/direxio-connect`.
 - Supported local agent targets are the connent/connect agent providers, treated as peers: `acp`, `antigravity`, `claudecode`, `codex`, `copilot`, `cursor`, `devin`, `gemini`, `iflow`, `kimi`, `opencode`, `pi`, `qoder`, `reasonix`, and `tmux`.
 - Do not reintroduce legacy local MCP/plugin/gateway installation flows or third-party chat platform wiring.
 - Do not hard-code one developer's home directory, shell, agent executable path, AWS region, domain, node id, token, or password.
@@ -46,7 +46,7 @@ If a change writes a path into `state.json`, `credentials.json`, `env`, `cc-conn
 - The generated cc-connect config must contain one Matrix platform and must restrict sync/replies to the real `agent_room_id`.
 - The generated agent config must preserve the selected connect agent type and optional agent-specific TOML. Some providers require more than `cmd`; for example `reasonix` needs `serve_url`, `tmux` needs `session`, and generic `acp` may need command/args.
 - `DIREXIO_AGENT_INSTALL=auto` may install/start `direxio-connect`; `recommend` must only write files and print commands.
-- `@direxio/connent` publishing and GitHub release assets are part of the install contract. Do not claim npm install works until the package and matching `direxio-connect` assets exist.
+- `direxio-connent` publishing and GitHub release assets are part of the install contract. Do not claim npm install works until the package and matching `direxio-connect` assets exist.
 
 ## Secrets And State
 

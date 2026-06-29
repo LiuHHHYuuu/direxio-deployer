@@ -444,11 +444,11 @@ _cc_connect_agent_command_aliases() {
 }
 
 _cc_connect_repo() {
-  printf '%s\n' "${DIREXIO_CC_CONNECT_REPO:-https://github.com/YingSuiAI/connect.git}"
+  printf '%s\n' "${DIREXIO_CC_CONNECT_REPO:-https://github.com/YingSuiAI/direxio-connect.git}"
 }
 
 _cc_connect_npm_package() {
-  printf '%s\n' "${DIREXIO_CC_CONNECT_NPM_PACKAGE:-@direxio/connent@1.3.10}"
+  printf '%s\n' "${DIREXIO_CC_CONNECT_NPM_PACKAGE:-direxio-connent@latest}"
 }
 
 _cc_connect_ref() {
@@ -471,7 +471,7 @@ _cc_connect_config_path() {
 }
 
 _mcp_npm_package() {
-  printf '%s\n' "${DIREXIO_MCP_NPM_PACKAGE:-@direxio/local-mcp@0.1.6}"
+  printf '%s\n' "${DIREXIO_MCP_NPM_PACKAGE:-direxio-mcp@latest}"
 }
 
 _mcp_command() {

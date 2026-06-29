@@ -46,8 +46,8 @@ jq -n \
     agent_credentials_file: ($service_dir + "/credentials.json"),
     cc_connect_config: ($service_dir + "/cc-connect/config.toml"),
     cc_connect_agent: "acp",
-    cc_connect_npm_package: "@direxio/connent@1.3.10",
-    mcp_npm_package: "@direxio/local-mcp@0.1.6",
+    cc_connect_npm_package: "direxio-connent@latest",
+    mcp_npm_package: "direxio-mcp@latest",
     mcp_server_name: "direxio-report-example-test",
     mcp_config_dir: ($service_dir + "/mcp"),
     mcp_codex_config: ($service_dir + "/mcp/codex.toml"),
@@ -130,7 +130,7 @@ jq -e '
   and .gates.user_confirmation_details.agent_mcp_runtime.runtime_probe_confirmed == true
   and .credentials.values_redacted == true
   and .security.secrets_included == false
-  and .mcp.package == "@direxio/local-mcp@0.1.6"
+  and .mcp.package == "direxio-mcp@latest"
   and .resources.route53_zone_id == "ZREPORT"
   and .resources.route53_zone_name == "report.example.test"
   and .resources.route53_existing_a_value == "198.51.100.20"

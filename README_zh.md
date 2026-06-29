@@ -1,6 +1,6 @@
 # Direxio Deployer
 
-`direxio-deployer` 是用于部署生产 Direxio message server 的通用 Agent Skill，并通过 Direxio 专用 Matrix 桥接把本地 agent room 接到当前 agent。当前本地桥接只支持 `direxio-connect`，安装包是 `@direxio/connent`，源码仓库是 `YingSuiAI/connect`。S6 也会给 Codex、OpenClaw、Hermes 这类支持 MCP 的宿主写入服务级 MCP 配置片段。
+`direxio-deployer` 是用于部署生产 Direxio message server 的通用 Agent Skill，并通过 Direxio 专用 Matrix 桥接把本地 agent room 接到当前 agent。当前本地桥接只支持 `direxio-connect`，安装包是 `direxio-connent`，源码仓库是 `YingSuiAI/direxio-connect`。S6 也会给 Codex、OpenClaw、Hermes 这类支持 MCP 的宿主写入服务级 MCP 配置片段。
 
 ## 内容
 
@@ -25,7 +25,7 @@
 - `DIREXIO_CC_CONNECT_AGENT` 用来选择本地 `direxio-connect` agent 类型。支持值与 connent/connect 一致：`acp`、`antigravity`、`claudecode`、`codex`、`copilot`、`cursor`、`devin`、`gemini`、`iflow`、`kimi`、`opencode`、`pi`、`qoder`、`reasonix`、`tmux`。
 - `DIREXIO_AGENT_PLATFORM` 表示正在执行部署 skill 的宿主运行时；`DIREXIO_CC_CONNECT_AGENT` 表示 `direxio-connect` 要启动的本地 agent 后端。检测到 OpenClaw 或 Hermes 运行时时，S6 会通过通用 `acp` agent 写入桥接配置，不会写成 connect 原生 `type = "openclaw"` 或 `type = "hermes"`。OpenClaw 默认写入 `cmd = "openclaw"`、`args = ["acp"]`；Hermes 默认写入 `cmd = "direxio-connect"`、`args = ["hermes-acp-adapter", "--", "hermes", "acp"]`，通过兼容层避免 Hermes 推理文本被当成用户可见回复。
 - 当本地 agent 可执行文件不能从 PATH 找到时，设置 `DIREXIO_CC_CONNECT_AGENT_CMD` 或 `DIREXIO_<AGENT>_COMMAND`。Codex Desktop 在 Windows 下也可以继续使用 `DIREXIO_CODEX_COMMAND`；OpenClaw 支持 `DIREXIO_OPENCLAW_COMMAND`；Hermes 使用 `DIREXIO_HERMES_COMMAND` 指定 adapter 后面的子进程命令，只有 adapter 命令本身不是 `direxio-connect` 时才需要 `DIREXIO_HERMES_ACP_ADAPTER_COMMAND`。
-- `DIREXIO_AGENT_INSTALL=auto` 会安装 `@direxio/connent` 并执行 `direxio-connect daemon install --config <config> --service-name <service_id> --force`。默认 `recommend` 只记录并打印命令。自动安装只有在 `direxio-connect daemon status --service-name <service_id>` 返回 `Status: Running` 时才记为 installed，否则 S6 会记录 `agent_install_status=install_failed`。
+- `DIREXIO_AGENT_INSTALL=auto` 会安装 `direxio-connent` 并执行 `direxio-connect daemon install --config <config> --service-name <service_id> --force`。默认 `recommend` 只记录并打印命令。自动安装只有在 `direxio-connect daemon status --service-name <service_id>` 返回 `Status: Running` 时才记为 installed，否则 S6 会记录 `agent_install_status=install_failed`。
 
 ## 最小命令
 
@@ -139,7 +139,7 @@ mcp/mcp-servers.json
 手动安装：
 
 ```bash
-npm install -g @direxio/connent
+npm install -g direxio-connent
 direxio-connect daemon install --config ~/.direxio/nodes/<service_id>/cc-connect/config.toml --service-name <service_id> --force
 direxio-connect daemon status --service-name <service_id>
 ```
@@ -147,7 +147,7 @@ direxio-connect daemon status --service-name <service_id>
 MCP 安装和检查：
 
 ```bash
-npm install -g @direxio/local-mcp
+npm install -g direxio-mcp
 DIREXIO_CREDENTIALS_FILE=~/.direxio/nodes/<service_id>/credentials.json direxio-mcp doctor --json
 ```
 
@@ -164,7 +164,7 @@ brew install direxio-connect
 源码构建：
 
 ```bash
-git clone https://github.com/YingSuiAI/connect.git
+git clone https://github.com/YingSuiAI/direxio-connect.git
 cd connect
 make build AGENTS=<cc-connect-agent> PLATFORMS_INCLUDE=matrix
 ```

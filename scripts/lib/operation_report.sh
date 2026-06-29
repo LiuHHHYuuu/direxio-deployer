@@ -157,14 +157,14 @@ operation_report_json() {
           values_redacted: true
         },
         connect: {
-          package: ($st.cc_connect_npm_package // "@direxio/connent@1.3.10"),
+          package: ($st.cc_connect_npm_package // "direxio-connent@latest"),
           agent: ($st.cc_connect_agent // ""),
           config: ($st.cc_connect_config // ""),
           install_status: ($st.agent_install_status // "")
         },
         mcp: {
           status: local_refresh_status,
-          package: ($st.mcp_npm_package // "@direxio/local-mcp@0.1.6"),
+          package: ($st.mcp_npm_package // "direxio-mcp@latest"),
           server_name: ($st.mcp_server_name // ""),
           config_dir: ($st.mcp_config_dir // ""),
           codex: ($st.mcp_codex_config // ""),
