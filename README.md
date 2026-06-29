@@ -112,7 +112,7 @@ $env:DOMAIN = "<domain>"
 .\scripts\destroy.ps1
 ```
 
-Destroy stops the local `direxio-connect` daemon only when its reported `WorkDir`
+Destroy stops and uninstalls the local `direxio-connect` daemon only when its reported `WorkDir`
 matches the current service's `~/.direxio/nodes/<service_id>/cc-connect`
 directory, then removes that service directory.
 

@@ -478,6 +478,12 @@ stop_current_cc_connect_daemon() {
   else
     log "cc-connect daemon stop failed or service was not installed; continuing destroy"
   fi
+  log "uninstalling cc-connect daemon for current service ..."
+  if "$stop_binary" daemon uninstall --service-name "$service_name" >/dev/null 2>&1; then
+    log "cc-connect daemon uninstalled"
+  else
+    log "cc-connect daemon uninstall failed or service was not installed; continuing destroy"
+  fi
 }
 
 cleanup_local_service_dir() {

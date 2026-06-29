@@ -104,6 +104,12 @@ grep -q '^direxio-connect daemon stop --service-name a5.direxio.ai$' "$current_c
   exit 1
 }
 
+grep -q '^direxio-connect daemon uninstall --service-name a5.direxio.ai$' "$current_calls" || {
+  echo "destroy should uninstall the daemon after stopping the matching current service daemon" >&2
+  cat "$current_calls" >&2
+  exit 1
+}
+
 if [ -d "$current_service" ]; then
   echo "destroy should remove the current service directory after stopping its daemon" >&2
   exit 1
@@ -125,6 +131,12 @@ grep -q '^direxio-connect daemon status --service-name b5.direxio.ai$' "$other_c
 
 if grep -q '^direxio-connect daemon stop' "$other_calls"; then
   echo "destroy must not stop a daemon whose status WorkDir belongs to a different service" >&2
+  cat "$other_calls" >&2
+  exit 1
+fi
+
+if grep -q '^direxio-connect daemon uninstall' "$other_calls"; then
+  echo "destroy must not uninstall a daemon whose status WorkDir belongs to a different service" >&2
   cat "$other_calls" >&2
   exit 1
 fi

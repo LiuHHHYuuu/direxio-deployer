@@ -110,7 +110,7 @@ $env:DOMAIN = "<domain>"
 ```
 
 销毁时只会在 `direxio-connect daemon status --service-name <service_id>` 返回的 `WorkDir` 等于当前服务的
-`~/.direxio/nodes/<service_id>/cc-connect` 目录时停止本地 daemon，然后删除该
+`~/.direxio/nodes/<service_id>/cc-connect` 目录时停止并卸载本地 daemon，然后删除该
 service 目录。
 
 更新现有节点但不删除数据：

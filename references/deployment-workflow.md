@@ -75,7 +75,7 @@ $env:DOMAIN = "__DOMAIN__"
 .\scripts\destroy.ps1
 ```
 
-Destroy stops the local `direxio-connect` daemon only when `direxio-connect daemon status --service-name <service_id>` reports a `WorkDir` matching the current service directory, `~/.direxio/nodes/<service_id>/cc-connect`. It then terminates the recorded EC2 instance, verifies the recorded EBS root volume, releases the Elastic IP, deletes the security group and key pair, removes Route53 records/zones created by the deployer, records AWS read-back results under `destroy.evidence`, and removes the corresponding local service directory under `~/.direxio/nodes/<service_id>`. This prevents stale credentials and `state.json` files from being treated as active deployments later while preserving an audit report for cleanup.
+Destroy stops and uninstalls the local `direxio-connect` daemon only when `direxio-connect daemon status --service-name <service_id>` reports a `WorkDir` matching the current service directory, `~/.direxio/nodes/<service_id>/cc-connect`. It then terminates the recorded EC2 instance, verifies the recorded EBS root volume, releases the Elastic IP, deletes the security group and key pair, removes Route53 records/zones created by the deployer, records AWS read-back results under `destroy.evidence`, and removes the corresponding local service directory under `~/.direxio/nodes/<service_id>`. This prevents stale credentials, `state.json` files, and local service registrations from being treated as active deployments later while preserving an audit report for cleanup.
 
 Destroy allows root AWS access-key identity when the operator explicitly chose
 root credentials. Use the same deployment profile for teardown that was used
