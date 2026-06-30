@@ -6,10 +6,10 @@ Use this file when installing or updating this skill and when reviewing S6 local
 
 Prefer a project-local npm-managed install when a project or workspace exists. Install the versioned package, then let the CLI copy the skill bundle into the runtime-specific target:
 
-Do not use a generic "install skills <GitHub URL>" instruction for normal users. That can invoke a host's GitHub skill installer and place this repository under the global runtime directory before the npm-managed installer runs. For Codex, the project-local instruction is:
+Do not use a generic "install skills <GitHub URL>" instruction for normal users. That can invoke a host's GitHub skill installer and place this repository under the global runtime directory before the npm-managed installer runs. A short user prompt should point the agent back to this npm/project-local rule:
 
 ```text
-Install the Direxio deployer skill in the current project via npm: run npm install -g direxio-deployer@latest, then run direxio-deployer skill install --agent codex --scope project --project .; do not install the skill from GitHub and do not install it globally under ~/.codex.
+Follow the direxio-deployer README npm/project-local install rule, then deploy Direxio with domain __DOMAIN__.
 ```
 
 POSIX shells:

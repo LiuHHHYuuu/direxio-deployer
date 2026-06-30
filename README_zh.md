@@ -21,11 +21,13 @@
 
 GitHub 仓库保留测试用于维护和 CI，但发布到 npm 的包以及安装到智能体 skill 目录的副本不包含 `tests/`，以减小用户安装体积。
 
-如果你想让 Codex 一句话安装并开始部署，不要说“安装 skills <GitHub 链接>”。那会触发 GitHub skill 安装器，容易安装到全局 `~/.codex`。推荐这样说：
+如果你想让 Codex 一句话安装并开始部署，不要说“安装 skills <GitHub 链接>”。那会触发 GitHub skill 安装器，容易安装到全局 `~/.codex`。推荐只说短句，让 agent 先读本 README 中的 npm/project-local 安装规则：
 
 ```text
-请在当前项目用 npm 安装 Direxio deployer skill：运行 npm install -g direxio-deployer@latest，然后运行 direxio-deployer skill install --agent codex --scope project --project .；不要从 GitHub 安装 skill，不要安装到全局 ~/.codex。安装后使用该 skill 部署 Direxio 服务，域名使用 __DOMAIN__。
+请按 direxio-deployer README 的 npm/project-local 规则安装 skill，然后部署 Direxio，域名 __DOMAIN__。
 ```
+
+Agent 读到这句后应执行下方 npm 安装命令；不要改用 GitHub skill installer。
 
 POSIX shell：
 
@@ -57,7 +59,7 @@ direxio-deployer skill install --agent codex --scope global
 安装器会在目标目录写入 `.direxio-skill-install.json`，并拒绝覆盖没有该 manifest 的既有目录，除非显式传入 `--force`。如需固定版本，先安装指定 npm 版本：
 
 ```bash
-npm install -g direxio-deployer@0.1.2
+npm install -g direxio-deployer@0.1.3
 direxio-deployer skill update --agent codex --scope project --project .
 ```
 
