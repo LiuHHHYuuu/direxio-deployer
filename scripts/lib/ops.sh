@@ -139,7 +139,6 @@ ops_stop_scoped_daemon() {
 
 ops_update_remote_command() {
   local image=${1:-} image_q remote_script
-  image_q=$(ops_sh_quote "$image")
   remote_script=$(cat <<'EOF'
 set -eu
 cd /opt/p2p
@@ -179,7 +178,12 @@ else
 fi
 EOF
 )
-  printf 'sudo MESSAGE_SERVER_IMAGE=%s sh -lc %s\n' "$image_q" "$(ops_sh_quote "$remote_script")"
+  if [ -n "$image" ]; then
+    image_q=$(ops_sh_quote "$image")
+    printf 'sudo MESSAGE_SERVER_IMAGE=%s sh -lc %s\n' "$image_q" "$(ops_sh_quote "$remote_script")"
+  else
+    printf 'sudo sh -lc %s\n' "$(ops_sh_quote "$remote_script")"
+  fi
 }
 
 ops_reset_remote_command() {

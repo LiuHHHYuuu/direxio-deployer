@@ -58,10 +58,10 @@ Use the matching agent name for your runtime: `codex`, `claudecode`, `gemini`, `
 direxio-deployer skill install --agent codex --scope project --project .
 ```
 
-The installer writes `.direxio-skill-install.json` into the target directory and refuses to overwrite unmanaged existing content unless `--force` is provided. To pin a version, install that package version first:
+The installer writes `.direxio-skill-install.json` into the target directory and refuses to overwrite unmanaged existing content unless `--force` is provided. Use `@latest` for normal installs and updates:
 
 ```bash
-npm install -g direxio-deployer@0.1.4
+npm install -g direxio-deployer@latest
 direxio-deployer skill update --agent codex
 ```
 

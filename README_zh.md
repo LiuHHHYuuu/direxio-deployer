@@ -56,10 +56,10 @@ direxio-deployer skill update --agent codex
 direxio-deployer skill install --agent codex --scope project --project .
 ```
 
-安装器会在目标目录写入 `.direxio-skill-install.json`，并拒绝覆盖没有该 manifest 的既有目录，除非显式传入 `--force`。如需固定版本，先安装指定 npm 版本：
+安装器会在目标目录写入 `.direxio-skill-install.json`，并拒绝覆盖没有该 manifest 的既有目录，除非显式传入 `--force`。普通安装和更新使用 `@latest`：
 
 ```bash
-npm install -g direxio-deployer@0.1.4
+npm install -g direxio-deployer@latest
 direxio-deployer skill update --agent codex
 ```
 

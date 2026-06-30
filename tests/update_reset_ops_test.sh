@@ -116,6 +116,15 @@ assert_contains "$update_calls" 'direxio-connect daemon status --service-name op
 assert_contains "$update_calls" 'direxio-connect daemon stop --service-name ops\.example\.test'
 assert_not_contains "$update_calls" 'volume rm|down -v|postgres-data|message-config|message-data|caddy-data|caddy-config'
 
+write_state "$state" "$service_dir"
+update_default_calls="$tmp/update-default.calls"
+: > "$update_default_calls"
+env -u MESSAGE_SERVER_IMAGE CALLS="$update_default_calls" PATH="$fakebin:$PATH" CONNECT_WORK_DIR="$service_dir/cc-connect" bash "$ROOT/scripts/update.sh" "$state" > "$tmp/update-default.out"
+assert_contains "$update_default_calls" 'sudo sh -lc'
+assert_not_contains "$update_default_calls" 'sudo MESSAGE_SERVER_IMAGE='
+assert_contains "$update_default_calls" 'docker compose --env-file \.env pull'
+assert_contains "$update_default_calls" 'docker compose --env-file \.env up -d'
+
 json_test_check "$state" "!(data.password || data.access_token || data.agent_token || data.agent_room_id) && data.agent_install_status === 'refresh_pending' && data.phases.S4_BOOTSTRAP_STACK.status === 'pending' && data.phases.S5_INIT_TOKENS.status === 'pending' && data.phases.S6_WIRE_LOCAL.status === 'pending' && data.phases.S7_VERIFY_E2E.status === 'pending' && !data.user_confirmations && !data.runtime_checks"
 
 update_report="$service_dir/operation-report.json"
