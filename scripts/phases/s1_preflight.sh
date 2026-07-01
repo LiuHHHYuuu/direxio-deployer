@@ -37,7 +37,26 @@ run_phase() {
       || { phase_set S1_PREFLIGHT failed "quota polling interrupted"; return 1; }
   fi
 
-  # 3) AMI (amd64/x86).
+  # 3) Elastic IP quota. Production domains need one free EIP before S3 creates resources.
+  local eip_quota eip_used
+  eip_quota=$(aws service-quotas get-service-quota --service-code ec2 --quota-code "$EC2_EIP_QUOTA_CODE" \
+          --query 'Quota.Value' --output text 2>/dev/null || echo "unknown")
+  eip_quota=${eip_quota:-unknown}
+  eip_used=$(aws ec2 describe-addresses --query 'length(Addresses)' --output text 2>/dev/null || echo "unknown")
+  eip_used=${eip_used:-unknown}
+  res_set eip_quota "$eip_quota"
+  res_set eip_allocated_count "$eip_used"
+  log "Elastic IP quota = $eip_quota, allocated = $eip_used (need 1 free)"
+  if _is_unknown_quota "$eip_quota" || _is_unknown_quota "$eip_used"; then
+    warn "Could not read Elastic IP quota/usage; continuing. If AllocateAddress returns AddressLimitExceeded, choose another region, release unused EIPs, or request a quota increase."
+  elif _num_ge "$eip_used" "$eip_quota"; then
+    phase_set S1_PREFLIGHT waiting_user "Elastic IP quota exhausted: allocated=$eip_used quota=$eip_quota"
+    warn "Elastic IP quota is exhausted in this region: allocated=$eip_used quota=$eip_quota."
+    warn "Choose another AWS region, destroy an old Direxio node, release an unused EIP, or request an Elastic IP quota increase before provisioning."
+    return 2
+  fi
+
+  # 4) AMI (amd64/x86).
   local ami
   ami=$(aws_lookup_ubuntu_ami)
   if [ "$ami" = "None" ] || [ -z "$ami" ]; then
@@ -47,7 +66,7 @@ run_phase() {
   res_set ami_id "$ami"
   log "AMI = $ami (Ubuntu 22.04 amd64/x86, user=ubuntu)"
 
-  phase_set S1_PREFLIGHT done "vpc=$vpc quota=$quota ami=$ami"
+  phase_set S1_PREFLIGHT done "vpc=$vpc quota=$quota eip=$eip_used/$eip_quota ami=$ami"
   return 0
 }
 
