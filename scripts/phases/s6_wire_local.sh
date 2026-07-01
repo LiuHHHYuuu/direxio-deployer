@@ -233,57 +233,61 @@ _runtime_has_context_signal() {
         _process_name_matches 'gemini'
       ;;
     cursor)
-      _active_text_contains '/.cursor/tmp/' ||
-        _active_text_contains '/.cursor/' ||
-        _active_text_contains 'cursor' ||
-        _process_name_matches 'cursor'
+      # Process match first: only the CURRENT process tree, NOT background daemons.
+      # A cursor daemon runs as 'direxio-connect', not 'cursor', so this correctly
+      # distinguishes interactive cursor from a cursor daemon serving another node.
+      _process_name_matches 'cursor' ||
+        _active_text_contains '/.cursor/tmp/' ||
+        _active_text_contains '/.cursor/'
       ;;
     copilot)
-      _active_text_contains '/.github/copilot/' ||
-        _active_text_contains '/.copilot/' ||
-        _process_name_matches 'copilot'
+      _process_name_matches 'copilot' ||
+        _active_text_contains '/.github/copilot/' ||
+        _active_text_contains '/.copilot/'
       ;;
     devin)
-      _active_text_contains '/.devin/' ||
-        _process_name_matches 'devin'
+      _process_name_matches 'devin' ||
+        _active_text_contains '/.devin/'
       ;;
     iflow)
-      _active_text_contains '/.iflow/' ||
-        _process_name_matches 'iflow'
+      _process_name_matches 'iflow' ||
+        _active_text_contains '/.iflow/'
       ;;
     kimi)
-      _active_text_contains '/.kimi/' ||
-        _process_name_matches 'kimi'
+      _process_name_matches 'kimi' ||
+        _active_text_contains '/.kimi/'
       ;;
     opencode)
-      _active_text_contains '/.opencode/' ||
-        _active_text_contains '/.open-code/' ||
-        _process_name_matches 'opencode'
+      _process_name_matches 'opencode' ||
+        _active_text_contains '/.opencode/' ||
+        _active_text_contains '/.open-code/'
       ;;
     pi)
-      _active_text_contains '/.pi/agent/' ||
-        _process_name_matches 'pi'
+      _process_name_matches 'pi' ||
+        _active_text_contains '/.pi/agent/'
       ;;
     qoder)
-      _active_text_contains '/.qoder/' ||
-        _process_name_matches 'qoder'
+      _process_name_matches 'qoder' ||
+        _active_text_contains '/.qoder/'
       ;;
     reasonix)
-      _active_text_contains '/.reasonix/' ||
-        _process_name_matches 'reasonix'
+      _process_name_matches 'reasonix' ||
+        _active_text_contains '/.reasonix/'
       ;;
     tmux)
       _process_name_matches 'tmux'
       ;;
     openclaw)
-      _active_text_contains '/.openclaw/tmp/' ||
-        _active_text_contains '/.openclaw/' ||
-        _process_name_matches 'openclaw'
+      _process_name_matches 'openclaw' ||
+        _active_text_contains '/.openclaw/tmp/' ||
+        _active_text_contains '/.openclaw/'
       ;;
     hermes)
-      _active_text_contains '/.hermes/tmp/' ||
-        _active_text_contains '/.hermes/' ||
-        _process_name_matches 'hermes'
+      # Process match first: a hermes daemon running under direxio-connect does
+      # not match 'hermes', so only a real interactive hermes session matches.
+      _process_name_matches 'hermes' ||
+        _active_text_contains '/.hermes/tmp/' ||
+        _active_text_contains '/.hermes/'
       ;;
     *) return 1 ;;
   esac
