@@ -544,6 +544,23 @@ cmd_run() {
   check_deps
   guard_existing_state || return $?
   state_ensure
+  # Allow forcing a re-run of specific phases (e.g. DIREXIO_FORCE_PHASES=S6).
+  # Useful when agent detection was wrong on first run and S6 must be rewired.
+  if [ -n "${DIREXIO_FORCE_PHASES:-}" ]; then
+    local force_ph
+    for force_ph in $(printf '%s' "$DIREXIO_FORCE_PHASES" | tr ',' ' '); do
+      case "$force_ph" in
+        S5|S6|S7) state_set "phases.${force_ph}_WIRE_LOCAL.status" "pending" 2>/dev/null || true
+                  state_set "phases.S5_INIT_TOKENS.status" "pending" 2>/dev/null || true
+                  state_set "phases.S6_WIRE_LOCAL.status" "pending" 2>/dev/null || true
+                  state_set "phases.S7_VERIFY_E2E.status" "pending" 2>/dev/null || true ;;
+        all)      for force_ph in S0_PREREQ_AWS S1_PREFLIGHT S2_DOMAIN S3_PROVISION S4_BOOTSTRAP_STACK S5_INIT_TOKENS S6_WIRE_LOCAL S7_VERIFY_E2E; do
+                    state_set "phases.$force_ph.status" "pending" 2>/dev/null || true
+                  done ;;
+        *)        warn "DIREXIO_FORCE_PHASES: unknown phase '$force_ph'. Use S5, S6, S7, or all." ;;
+      esac
+    done
+  fi
   ensure_production_domain_selected || return $?
   ensure_region_selected || return $?
   ensure_cost_estimate
@@ -870,6 +887,53 @@ connect_daemon_agent_error_from_logs() {
     | head -n 1 || true
 }
 
+# Check whether recent daemon logs contain M_UNKNOWN_TOKEN errors that suggest
+# the Matrix access token was invalidated (e.g. after App initialization).
+_daemon_has_recent_token_error() {
+  local binary=$1 service_name=$2
+  "$binary" daemon logs --service-name "$service_name" -n "${DIREXIO_CONNECT_LOG_TAIL_LINES:-80}" 2>/dev/null \
+    | grep -q 'M_UNKNOWN_TOKEN' 2>/dev/null
+}
+
+# Locate a binary executable across PATH and platform-specific global install
+# directories (npm global, nvm, Windows AppData).  Falls back gracefully so
+# verify-runtime works from Git Bash, MSYS2, and other POSIX-on-Windows shells.
+_find_binary() {
+  local binary=$1 candidate
+  # Direct path (contains / or drive letter) — use as-is.
+  case "$binary" in
+    */*|[A-Za-z]:/*|[A-Za-z]:\\*)
+      [ -x "$binary" ] && { printf '%s\n' "$binary"; return 0; }
+      return 1
+      ;;
+  esac
+  # Standard PATH lookup.
+  candidate=$(command -v "$binary" 2>/dev/null) || true
+  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  # Windows-specific fallbacks: npm global prefix, nvm, AppData.
+  case "$(uname -s)" in
+    *MINGW*|*MSYS*|*CYGWIN*)
+      local prefix
+      for prefix in \
+        "${NVM_HOME:-}" \
+        "${NVM_HOME:-}/v"* \
+        "${APPDATA:-}/npm" \
+        "$HOME/AppData/Roaming/npm" \
+        "$HOME/../Roaming/npm"; do
+        [ -n "$prefix" ] || continue
+        [ -d "$prefix" ] || continue
+        for candidate in "$prefix/$binary" "$prefix/$binary.exe" "$prefix/node_modules/.bin/$binary" "$prefix/node_modules/.bin/$binary.exe"; do
+          [ -x "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
+        done
+      done
+      ;;
+  esac
+  return 1
+}
+
 cmd_verify_connect_daemon() {
   [ -f "$STATE_JSON" ] || {
     warn "state.json not found: $STATE_JSON"
@@ -897,16 +961,12 @@ cmd_verify_connect_daemon() {
     return 1
   fi
 
-  case "$binary" in
-    */*|[A-Za-z]:/*|[A-Za-z]:\\*) ;;
-    *)
-      command -v "$binary" >/dev/null 2>&1 || {
-        state_set_object runtime_checks.connect_daemon status=failed "ts=$(_now)" "evidence=direxio-connect binary not found"
-        warn "connect daemon check could not find binary: $binary"
-        return 1
-      }
-      ;;
-  esac
+  # Resolve binary through PATH and platform-specific search paths.
+  binary=$(_find_binary "$binary") || {
+    state_set_object runtime_checks.connect_daemon status=failed "ts=$(_now)" "evidence=direxio-connect binary not found"
+    warn "connect daemon check could not find binary: $binary"
+    return 1
+  }
 
   status_out=$("$binary" daemon status --service-name "$service_name" 2>/dev/null) || {
     state_set_object runtime_checks.connect_daemon status=failed "ts=$(_now)" "service_name=$service_name" "evidence=direxio-connect daemon status failed"
@@ -935,6 +995,12 @@ cmd_verify_connect_daemon() {
         "agent_error=$agent_error"
       warn "direxio-connect daemon logs report ACP session initialization failure"
       return 1
+    fi
+    # Detect M_UNKNOWN_TOKEN: the daemon is running but its Matrix access token
+    # was invalidated (e.g. after App initialization resets the owner session).
+    # This is a warning, not a hard failure — the daemon is still alive.
+    if _daemon_has_recent_token_error "$binary" "$service_name"; then
+      warn "Daemon is running but recent logs show M_UNKNOWN_TOKEN. The Matrix access token may have been invalidated. Re-run deployment with DIREXIO_EXISTING_STATE_ACTION=continue to refresh S5→S6 credentials."
     fi
     state_set_object runtime_checks.connect_daemon \
       status=passed \

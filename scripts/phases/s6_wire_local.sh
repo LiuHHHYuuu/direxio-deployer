@@ -78,19 +78,61 @@ _detect_agent_runtime() {
 
 _active_agent_runtime() {
   local runtime
+  # Pass 1: env signal + corroboration (process/PATH match or active runtime session).
+  # An env var alone (e.g. residual HERMES_HOME) is too weak to identify the current agent.
   for runtime in $(_detectable_agent_runtimes); do
-    if _runtime_has_env_signal "$runtime"; then
+    if _runtime_has_env_signal "$runtime" && _runtime_has_corroboration "$runtime"; then
       printf '%s\n' "$runtime"
       return 0
     fi
   done
+  # Pass 2: context signal alone (process name, PATH, or working directory match).
   for runtime in $(_detectable_agent_runtimes); do
     if _runtime_has_context_signal "$runtime"; then
       printf '%s\n' "$runtime"
       return 0
     fi
   done
+  # Pass 3: env signal + config directory exists (weak fallback for single-agent machines).
+  for runtime in $(_detectable_agent_runtimes); do
+    if _runtime_has_env_signal "$runtime" && _runtime_config_dir_exists "$runtime"; then
+      printf '%s\n' "$runtime"
+      return 0
+    fi
+  done
   return 0
+}
+
+# Corroboration: the agent must show a live process signal OR a recently-active
+# runtime session directory.  Prevents residual env vars from hijacking detection.
+_runtime_has_corroboration() {
+  _runtime_has_context_signal "$1" || _runtime_has_runtime_session "$1"
+}
+
+# Check whether the agent runtime has an active session directory (tmp files
+# modified within the last 30 minutes).  This is a stronger signal than a bare
+# env var, but weaker than a live process or PATH match.
+_runtime_has_runtime_session() {
+  case "$1" in
+    acp)         [ -d "$HOME/.acp/tmp" ]        && [ -n "$(find "$HOME/.acp/tmp"        -type f -mmin -30 2>/dev/null | head -1)" ] ;;
+    antigravity) [ -d "$HOME/.antigravity/tmp" ] && [ -n "$(find "$HOME/.antigravity/tmp" -type f -mmin -30 2>/dev/null | head -1)" ] ;;
+    claudecode|claude-code) [ -d "$HOME/.claude/tmp" ] && [ -n "$(find "$HOME/.claude/tmp" -type f -mmin -30 2>/dev/null | head -1)" ] ;;
+    codex)       [ -d "$HOME/.codex/tmp" ]       && [ -n "$(find "$HOME/.codex/tmp"       -type f -mmin -30 2>/dev/null | head -1)" ] ;;
+    copilot)     [ -d "$HOME/.copilot/tmp" ]     && [ -n "$(find "$HOME/.copilot/tmp"     -type f -mmin -30 2>/dev/null | head -1)" ] ;;
+    cursor)      [ -d "$HOME/.cursor/tmp" ]      && [ -n "$(find "$HOME/.cursor/tmp"      -type f -mmin -30 2>/dev/null | head -1)" ] ;;
+    devin)       [ -d "$HOME/.devin/tmp" ]       && [ -n "$(find "$HOME/.devin/tmp"       -type f -mmin -30 2>/dev/null | head -1)" ] ;;
+    gemini)      [ -d "$HOME/.gemini/tmp" ]      && [ -n "$(find "$HOME/.gemini/tmp"      -type f -mmin -30 2>/dev/null | head -1)" ] ;;
+    iflow)       [ -d "$HOME/.iflow/tmp" ]       && [ -n "$(find "$HOME/.iflow/tmp"       -type f -mmin -30 2>/dev/null | head -1)" ] ;;
+    kimi)        [ -d "$HOME/.kimi/tmp" ]        && [ -n "$(find "$HOME/.kimi/tmp"        -type f -mmin -30 2>/dev/null | head -1)" ] ;;
+    opencode)    [ -d "$HOME/.opencode/tmp" ]    && [ -n "$(find "$HOME/.opencode/tmp"    -type f -mmin -30 2>/dev/null | head -1)" ] ;;
+    pi)          [ -d "$HOME/.pi/agent/tmp" ]    && [ -n "$(find "$HOME/.pi/agent/tmp"    -type f -mmin -30 2>/dev/null | head -1)" ] ;;
+    qoder)       [ -d "$HOME/.qoder/tmp" ]       && [ -n "$(find "$HOME/.qoder/tmp"       -type f -mmin -30 2>/dev/null | head -1)" ] ;;
+    reasonix)    [ -d "$HOME/.reasonix/tmp" ]    && [ -n "$(find "$HOME/.reasonix/tmp"    -type f -mmin -30 2>/dev/null | head -1)" ] ;;
+    tmux)        return 1 ;;  # tmux sessions are inherently active or not; context signal covers this
+    openclaw)    [ -d "$HOME/.openclaw/tmp" ]    && [ -n "$(find "$HOME/.openclaw/tmp"    -type f -mmin -30 2>/dev/null | head -1)" ] ;;
+    hermes)      [ -d "$HOME/.hermes/tmp" ]      && [ -n "$(find "$HOME/.hermes/tmp"      -type f -mmin -30 2>/dev/null | head -1)" ] ;;
+    *) return 1 ;;
+  esac
 }
 
 _detectable_agent_runtimes() {
@@ -1045,6 +1087,9 @@ _maybe_auto_install_cc_connect() {
     state_set agent_install_status "$policy" 2>/dev/null || true
     return 0
   fi
+  # Allow tuning binary download timeouts for slow GitHub connections.
+  export DIREXIO_CONNECT_DOWNLOAD_TIMEOUT="${DIREXIO_CONNECT_DOWNLOAD_TIMEOUT:-300}"
+  export DIREXIO_CONNECT_DOWNLOAD_RETRIES="${DIREXIO_CONNECT_DOWNLOAD_RETRIES:-3}"
   config_arg=$(_local_connect_path "$config_path")
   if [ "${DIREXIO_CC_CONNECT_INSTALL_FROM:-npm}" != "source" ]; then
     if ! command -v npm >/dev/null 2>&1; then
@@ -1052,7 +1097,43 @@ _maybe_auto_install_cc_connect() {
       state_set agent_install_status "npm_missing" 2>/dev/null || true
       return 0
     fi
-    if npm install -g "$(_cc_connect_npm_package)" && "$binary" daemon install --config "$config_arg" --service-name "$service_name" --force; then
+    # When the binary is already usable (e.g. another node keeps it installed),
+    # skip npm install to avoid EBUSY file-lock errors on Windows.
+    local npm_install_needed=1
+    if "$binary" daemon --help >/dev/null 2>&1; then
+      npm_install_needed=0
+      if "$binary" daemon install --config "$config_arg" --service-name "$service_name" --force; then
+        if _cc_connect_daemon_is_running "$binary" "$service_name"; then
+          if ! _cc_connect_daemon_has_agent_startup_error "$binary" "$service_name"; then
+            state_set agent_install_status "installed" 2>/dev/null || true
+            ok "cc-connect daemon installed for $runtime using Matrix room bridge (existing binary)."
+            return 0
+          fi
+        fi
+      fi
+      # Binary exists but daemon install failed; fall through to npm install path.
+      warn "cc-connect binary present but daemon install failed; attempting npm refresh."
+    fi
+    if [ "$npm_install_needed" = "1" ] || ! npm install -g "$(_cc_connect_npm_package)" 2>/dev/null; then
+      # npm install may fail (e.g. EBUSY on Windows).  If the binary already
+      # works, retry daemon install without npm.
+      if [ "$npm_install_needed" = "0" ]; then
+        warn "npm install skipped or failed; retrying daemon install with existing binary."
+        if "$binary" daemon install --config "$config_arg" --service-name "$service_name" --force; then
+          if _cc_connect_daemon_is_running "$binary" "$service_name"; then
+            if ! _cc_connect_daemon_has_agent_startup_error "$binary" "$service_name"; then
+              state_set agent_install_status "installed" 2>/dev/null || true
+              ok "cc-connect daemon installed for $runtime using Matrix room bridge."
+              return 0
+            fi
+          fi
+        fi
+      fi
+      state_set agent_install_status "install_failed" 2>/dev/null || true
+      warn "cc-connect npm install or daemon install failed. Config is available for manual start."
+      return 0
+    fi
+    if "$binary" daemon install --config "$config_arg" --service-name "$service_name" --force; then
       if ! _cc_connect_daemon_is_running "$binary" "$service_name"; then
         state_set agent_install_status "install_failed" 2>/dev/null || true
         warn "cc-connect daemon install returned success, but daemon status is not Running. Check the local agent command and cc-connect logs."
