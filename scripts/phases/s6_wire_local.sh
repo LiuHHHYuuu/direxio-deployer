@@ -939,7 +939,14 @@ EOF
 
 _create_cc_connect_matrix_session() {
   local asurl=$1 agent_auth_token=$2 device_id=$3 out=$4 body code http_body
-  local max_attempts interval max_interval attempt preview sleep_for
+  local max_attempts interval max_interval attempt preview sleep_for domain pubip resolve_flag
+  domain=$(state_get domain)
+  pubip=$(res_get public_ip)
+  if [ -n "$domain" ] && [ -n "$pubip" ]; then
+    resolve_flag="--resolve $domain:443:$pubip"
+  else
+    resolve_flag=""
+  fi
   body=$(json_build matrix-session-create "$device_id")
   max_attempts=${DIREXIO_MATRIX_SESSION_CREATE_MAX:-12}
   interval=${DIREXIO_MATRIX_SESSION_RETRY_INTERVAL:-2}
@@ -948,7 +955,7 @@ _create_cc_connect_matrix_session() {
   sleep_for=$interval
   while [ "$attempt" -le "$max_attempts" ]; do
     http_body=$(mktemp)
-    code=$(curl -sk \
+    code=$(curl -sk $resolve_flag \
       --connect-timeout "${DIREXIO_MATRIX_SESSION_CURL_CONNECT_TIMEOUT:-10}" \
       --max-time "${DIREXIO_MATRIX_SESSION_CURL_MAX_TIME:-20}" \
       -o "$http_body" -w '%{http_code}' -X POST "$asurl/_p2p/command" \
