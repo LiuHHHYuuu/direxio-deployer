@@ -14,6 +14,15 @@ This design adds a new product agent path. It does not replace the existing depl
 - The first product agent does not run a local model by default.
 - The first product agent does not send messages to other contacts on the user's behalf.
 
+## Ownership Boundary
+
+This project slice is responsible only for the product-agent surface:
+
+- In scope: product-agent specs, future `agent-service` code, future `ai-gateway` code, hosted AI token flow, and narrowly scoped agent configuration.
+- Out of scope without explicit approval: mobile app implementation, `message-server` internals, shared deployer orchestration, cloud infrastructure defaults, existing `cc-connect` bridge behavior, and existing MCP tooling.
+
+If product-agent work needs a change in an out-of-scope surface, the implementation should define the smallest interface contract and ask for approval before touching that code.
+
 ## Product Contract
 
 The mobile app shows `Direxio AI` as a special contact or conversation entry. It occupies the same list surface as a normal friend so the first version feels familiar and does not require a new primary app tab.

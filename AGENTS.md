@@ -11,6 +11,12 @@
 - Do not reintroduce legacy local MCP/plugin/gateway installation flows or third-party chat platform wiring.
 - Do not hard-code one developer's home directory, shell, agent executable path, AWS region, domain, node id, token, or password.
 
+## Ownership Boundary
+
+- Product-agent work is owned separately from the rest of the product. Default editable surfaces are product-agent specs, future `agent-service` code, future `ai-gateway` code, and narrowly scoped agent configuration.
+- Do not modify mobile app code, `message-server` behavior, shared deployer orchestration, cloud infrastructure defaults, existing `cc-connect` bridge behavior, or existing MCP tooling for product-agent work unless the user explicitly approves that named surface.
+- When a product-agent task appears to require another team's surface, stop and propose the smallest interface contract instead of editing that surface directly.
+
 ## Platform Law
 
 Every deployer change must classify paths and commands by the platform that will consume them:
