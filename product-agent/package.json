@@ -1,0 +1,20 @@
+{
+  "name": "@direxio/product-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "tsx ../tests/product_agent_contract_test.ts",
+    "dev:agent-service": "tsx src/bin/agent-service.ts",
+    "dev:ai-gateway": "tsx src/bin/ai-gateway.ts"
+  },
+  "dependencies": {
+    "fastify": "^5.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.0",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}
