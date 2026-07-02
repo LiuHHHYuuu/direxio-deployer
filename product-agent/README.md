@@ -2,6 +2,8 @@
 
 This directory contains the product-agent-owned MVP surface for the hosted Direxio AI design. It is intentionally separate from the existing deployer, `cc-connect`, and MCP wiring.
 
+The implementation uses TypeScript, Node.js, and Fastify.
+
 ## Scope
 
 Owned here:
@@ -23,25 +25,35 @@ Not owned here:
 Run the isolated contract test:
 
 ```bash
-node tests/product_agent_contract_test.mjs
+cd product-agent
+npm test
 ```
 
 The test starts in-process HTTP servers and does not call real model providers.
+
+Run the TypeScript checker:
+
+```bash
+cd product-agent
+npm run check
+```
 
 ## Prototype Servers
 
 Start a local gateway with a test token:
 
 ```bash
-DIREXIO_AI_GATEWAY_TOKENS=dxai_test node product-agent/bin/ai-gateway.mjs
+cd product-agent
+DIREXIO_AI_GATEWAY_TOKENS=dxai_test npm run dev:ai-gateway
 ```
 
 Start a local agent service that uses that gateway:
 
 ```bash
+cd product-agent
 DIREXIO_AI_TOKEN=dxai_test \
 DIREXIO_AI_GATEWAY_URL=http://127.0.0.1:8787 \
-node product-agent/bin/agent-service.mjs
+npm run dev:agent-service
 ```
 
 The prototype `agent-service` accepts product AI conversation events at:
