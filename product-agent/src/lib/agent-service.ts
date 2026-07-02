@@ -1,4 +1,5 @@
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
+import { toAgentMessageEvent, type MessageServerNewMessageEvent } from "./message-server-adapter.js";
 import type { FetchLike, GatewayChatRequest, GatewayMessage } from "./types.js";
 
 export interface AgentServiceOptions {
@@ -54,6 +55,46 @@ export function createAgentServiceApp(options: AgentServiceOptions = {}): Fastif
   app.post("/v1/agent/messages", async (request, reply) => {
     const event = asRecord(request.body);
 
+    return handleAgentMessageEvent({
+      event,
+      aiToken,
+      gatewayUrl,
+      fetchImpl,
+      reply
+    });
+  });
+
+  app.post("/v1/message-server/new-message", async (request, reply) => {
+    const adapted = toAgentMessageEvent(request.body as MessageServerNewMessageEvent);
+    if ("ignored" in adapted) {
+      return reply.status(202).send(adapted);
+    }
+
+    return handleAgentMessageEvent({
+      event: adapted as unknown as Record<string, unknown>,
+      aiToken,
+      gatewayUrl,
+      fetchImpl,
+      reply
+    });
+  });
+
+  return app;
+}
+
+async function handleAgentMessageEvent({
+  event,
+  aiToken,
+  gatewayUrl,
+  fetchImpl,
+  reply
+}: {
+  event: Record<string, unknown>;
+  aiToken: string;
+  gatewayUrl: string;
+  fetchImpl: FetchLike;
+  reply: FastifyReply;
+}) {
     if (event.conversation_type !== "direxio_ai") {
       return reply.status(202).send({ ignored: true, reason: "not_ai_conversation" });
     }
@@ -91,9 +132,6 @@ export function createAgentServiceApp(options: AgentServiceOptions = {}): Fastif
         content: gatewayResponse.reply
       }
     });
-  });
-
-  return app;
 }
 
 export function buildGatewayChatPayload(event: Record<string, unknown>): GatewayChatRequest {

@@ -38,7 +38,37 @@ cd product-agent
 npm run check
 ```
 
+Build the production JavaScript output:
+
+```bash
+cd product-agent
+npm run build
+```
+
+Build the self-hosted `agent-service` container image:
+
+```bash
+cd product-agent
+docker build -t direxio/product-agent:latest .
+```
+
 ## Prototype Servers
+
+For Windows local development, copy the example env file and use the one-command starter:
+
+```powershell
+cd product-agent
+Copy-Item .env.local.example .env.local
+# Edit .env.local and fill DIREXIO_MODEL_API_KEY for DeepSeek.
+powershell -ExecutionPolicy Bypass -File scripts/dev.ps1 -Restart -RunModelCheck
+```
+
+Stop local product-agent processes:
+
+```powershell
+cd product-agent
+powershell -ExecutionPolicy Bypass -File scripts/stop-dev.ps1
+```
 
 Start a local gateway with a test token:
 
@@ -46,6 +76,21 @@ Start a local gateway with a test token:
 cd product-agent
 DIREXIO_AI_GATEWAY_TOKENS=dxai_test npm run dev:ai-gateway
 ```
+
+By default the local gateway uses the deterministic echo client. To call a real OpenAI-compatible provider, opt in explicitly:
+
+```bash
+cd product-agent
+DIREXIO_AI_GATEWAY_TOKENS=dxai_test \
+DIREXIO_AI_GATEWAY_MODEL_MODE=openai-compatible \
+DIREXIO_AI_GATEWAY_DEBUG_PROVIDER=1 \
+DIREXIO_MODEL_API_KEY=<provider-api-key> \
+DIREXIO_MODEL_BASE_URL=https://api.openai.com/v1 \
+DIREXIO_MODEL_NAME=gpt-4.1-mini \
+npm run dev:ai-gateway
+```
+
+`DIREXIO_AI_GATEWAY_DEBUG_PROVIDER=1` is for local diagnostics only. It returns the provider HTTP status and a sanitized provider error body when the model call fails.
 
 Start a local agent service that uses that gateway:
 
@@ -56,11 +101,41 @@ DIREXIO_AI_GATEWAY_URL=http://127.0.0.1:8787 \
 npm run dev:agent-service
 ```
 
-The prototype `agent-service` accepts product AI conversation events at:
+The prototype `agent-service` accepts normalized product AI conversation events at:
 
 ```http
 POST /v1/agent/messages
 Content-Type: application/json
 ```
 
-It forwards only AI conversation messages, plus explicitly authorized selected context, to the hosted gateway.
+It also accepts message-server-shaped new-message events at:
+
+```http
+POST /v1/message-server/new-message
+Content-Type: application/json
+```
+
+The direct message-server endpoint accepts both the hosted-agent contract value
+`conversation_type: "direxio_ai"` and the current message-server product kind
+`conversation_type: "agent"`. Both paths forward only AI conversation messages,
+plus explicitly authorized selected context, to the hosted gateway.
+
+## Dev Integration Server
+
+Run a local message-server handoff simulation:
+
+```bash
+cd product-agent
+DIREXIO_AI_TOKEN=dxai_test \
+DIREXIO_AI_GATEWAY_URL=http://127.0.0.1:8787 \
+npm run dev:integration
+```
+
+Send a simulated message-server event:
+
+```http
+POST /dev/message-server/new-message
+Content-Type: application/json
+```
+
+This endpoint passes the event through the same `POST /v1/message-server/new-message` path that future message-server wiring should call.

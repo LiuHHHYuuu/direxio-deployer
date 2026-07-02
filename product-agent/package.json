@@ -4,10 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
     "check": "tsc --noEmit",
     "test": "tsx ../tests/product_agent_contract_test.ts",
+    "start:agent-service": "node dist/bin/agent-service.js",
+    "start:ai-gateway": "node dist/bin/ai-gateway.js",
     "dev:agent-service": "tsx src/bin/agent-service.ts",
-    "dev:ai-gateway": "tsx src/bin/ai-gateway.ts"
+    "dev:ai-gateway": "tsx src/bin/ai-gateway.ts",
+    "dev:integration": "tsx src/bin/dev-integration-server.ts",
+    "dev:local:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev.ps1",
+    "dev:stop:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stop-dev.ps1"
   },
   "dependencies": {
     "fastify": "^5.9.0"

@@ -1,8 +1,8 @@
 # docker-compose.yml - cloud-side Direxio message-server stack.
 #
 # Layers: Caddy (public 443/TLS) -> Direxio message-server (Matrix + Direxio API).
-# PostgreSQL 18 persists Matrix and Direxio business tables. The local agent bridge
-# process is not started in the cloud by default.
+# PostgreSQL 18 persists Matrix and Direxio business tables. Product-agent is
+# default-off and only wired when DIREXIO_PRODUCT_AGENT_URL is configured.
 
 networks:
   direxio-net:
@@ -67,6 +67,7 @@ services:
     environment:
       P2P_PORTAL_CREDENTIALS_FILE: /var/direxio-message-server/p2p/bootstrap.json
       P2P_PORTAL_PASSWORD: ${P2P_PORTAL_PASSWORD}
+      DIREXIO_PRODUCT_AGENT_URL: ${DIREXIO_PRODUCT_AGENT_URL:-}
     command:
       - --config
       - /etc/direxio-message-server/message-server.yaml
@@ -82,6 +83,24 @@ services:
       timeout: 5s
       retries: 30
       start_period: 15s
+    restart: unless-stopped
+
+  product-agent:
+    # Optional product-agent runtime. It is behind a Compose profile so existing
+    # deployments do not start it unless the operator explicitly enables it.
+    profiles: ["product-agent"]
+    image: ${DIREXIO_PRODUCT_AGENT_IMAGE:-direxio/product-agent:latest}
+    networks: [direxio-net]
+    depends_on:
+      message-server:
+        condition: service_healthy
+    environment:
+      DIREXIO_AGENT_SERVICE_HOST: 0.0.0.0
+      DIREXIO_AGENT_SERVICE_PORT: 8797
+      DIREXIO_AI_GATEWAY_URL: ${DIREXIO_AI_GATEWAY_URL:-https://ai.direxio.com}
+      DIREXIO_AI_TOKEN: ${DIREXIO_AI_TOKEN:-}
+    expose:
+      - "8797"
     restart: unless-stopped
 
   caddy:

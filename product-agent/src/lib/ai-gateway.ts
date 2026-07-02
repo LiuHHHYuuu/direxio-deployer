@@ -5,24 +5,40 @@ import type { GatewayChatRequest, GatewayMessage, ModelClient, TokenVerifier } f
 export interface AiGatewayOptions {
   verifyToken?: TokenVerifier;
   modelClient?: ModelClient;
+  env?: NodeJS.ProcessEnv;
+  fetchImpl?: typeof fetch;
   logger?: boolean;
 }
 
 export class ModelProviderError extends Error {
   readonly status: number;
   readonly code: string;
+  readonly providerStatus?: number;
+  readonly providerBody?: string;
 
-  constructor(message: string, status = 502, code = "provider_error") {
+  constructor(
+    message: string,
+    status = 502,
+    code = "provider_error",
+    providerDebug: { status?: number; body?: string } = {}
+  ) {
     super(message);
     this.name = "ModelProviderError";
     this.status = status;
     this.code = code;
+    this.providerStatus = providerDebug.status;
+    this.providerBody = providerDebug.body;
   }
 }
 
 export function createAiGatewayApp(options: AiGatewayOptions = {}): FastifyInstance {
+  const env = options.env || process.env;
   const verifyToken = options.verifyToken || createEnvTokenVerifier();
-  const modelClient = options.modelClient || createEchoModelClient();
+  const modelClient = options.modelClient || createDefaultModelClient({
+    env,
+    fetchImpl: options.fetchImpl
+  });
+  const debugProvider = env.DIREXIO_AI_GATEWAY_DEBUG_PROVIDER === "1";
 
   const app = Fastify({
     logger: options.logger ?? false,
@@ -80,7 +96,13 @@ export function createAiGatewayApp(options: AiGatewayOptions = {}): FastifyInsta
       const status = providerErrorStatus(error);
       const code = providerErrorCode(error, status);
       const message = status === 429 ? "AI quota exceeded." : "Model provider failed.";
-      return reply.status(status).send({ error: { code, message } });
+      return reply.status(status).send({
+        error: {
+          code,
+          message,
+          ...(debugProvider ? providerDebugPayload(error) : {})
+        }
+      });
     }
   });
 
@@ -124,6 +146,23 @@ export function createEchoModelClient(options: { prefix?: string } = {}): ModelC
   };
 }
 
+export function createDefaultModelClient(options: {
+  env?: NodeJS.ProcessEnv;
+  fetchImpl?: typeof fetch;
+} = {}): ModelClient {
+  const env = options.env || process.env;
+  const mode = env.DIREXIO_AI_GATEWAY_MODEL_MODE || "echo";
+  if (mode === "openai-compatible") {
+    return createOpenAICompatibleClient({
+      baseUrl: env.DIREXIO_MODEL_BASE_URL,
+      apiKey: env.DIREXIO_MODEL_API_KEY,
+      model: env.DIREXIO_MODEL_NAME,
+      fetchImpl: options.fetchImpl
+    });
+  }
+  return createEchoModelClient();
+}
+
 export function createOpenAICompatibleClient(options: {
   baseUrl?: string;
   apiKey?: string;
@@ -156,7 +195,11 @@ export function createOpenAICompatibleClient(options: {
       throw new ModelProviderError(
         "model provider failed",
         response.status === 429 ? 429 : 502,
-        response.status === 429 ? "quota_exceeded" : "provider_error"
+        response.status === 429 ? "quota_exceeded" : "provider_error",
+        {
+          status: response.status,
+          body: sanitizeProviderBody(body)
+        }
       );
     }
     const choices = Array.isArray(body.choices) ? body.choices : [];
@@ -214,6 +257,21 @@ function providerErrorCode(error: unknown, status: number): string {
     return error.code;
   }
   return status === 429 ? "quota_exceeded" : "provider_error";
+}
+
+function providerDebugPayload(error: unknown): Record<string, unknown> {
+  if (!(error instanceof ModelProviderError)) {
+    return {};
+  }
+  return {
+    provider_status: error.providerStatus || error.status,
+    provider_body: error.providerBody || ""
+  };
+}
+
+function sanitizeProviderBody(body: unknown): string {
+  const text = typeof body === "string" ? body : JSON.stringify(body);
+  return text.replace(/sk-[A-Za-z0-9_-]+/g, "sk-***").slice(0, 1200);
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

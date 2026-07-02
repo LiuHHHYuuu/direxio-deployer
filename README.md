@@ -163,6 +163,23 @@ DOMAIN=<domain> MESSAGE_SERVER_IMAGE=direxio/message-server:latest bash scripts/
 Image refresh restarts the remote service only. It leaves local credentials,
 `direxio-connect`, MCP artifacts, user confirmations, and runtime checks intact.
 
+Optional product agent runtime:
+
+The rendered cloud compose file includes a default-off `product-agent` profile. Existing deployments do not start it. To test the product agent beside the self-hosted stack, SSH to the server, add server-side AI values to `/opt/p2p/.env`, and start the profile:
+
+```bash
+cd /opt/p2p
+sudo sh -lc 'cat >> .env <<EOF
+DIREXIO_PRODUCT_AGENT_URL=http://product-agent:8797
+DIREXIO_PRODUCT_AGENT_IMAGE=direxio/product-agent:latest
+DIREXIO_AI_GATEWAY_URL=https://ai.direxio.com
+DIREXIO_AI_TOKEN=dxai_xxx
+EOF
+COMPOSE_PROFILES=product-agent docker compose --env-file .env up -d message-server product-agent'
+```
+
+`DIREXIO_PRODUCT_AGENT_URL` is the message-server switch. When it is empty, the AI friend stays offline and no chat content is sent to product-agent. When it points at `product-agent`, messages in the built-in Direxio AI room are forwarded server-side and replies are written back as `@agent:<domain>`.
+
 Reset application data while preserving EC2, DNS, fixed IP, and Caddy TLS:
 
 ```bash

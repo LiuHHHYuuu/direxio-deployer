@@ -33,6 +33,14 @@ grep -q 'agent_auth_token=$(json_string agent_token "$BOOTSTRAP_FILE")' "$tmp/bu
 grep -q 'agent.matrix_session.create.*"$agent_auth_token"' "$tmp/bundle/init-tokens.sh"
 grep -q '/_matrix/client/v3/createRoom' "$tmp/bundle/init-tokens.sh"
 grep -q '/_matrix/client/v3/rooms/${room_path}/join' "$tmp/bundle/init-tokens.sh"
+grep -q 'profiles: \["product-agent"\]' "$tmp/bundle/docker-compose.yml"
+grep -q 'DIREXIO_PRODUCT_AGENT_IMAGE:-direxio/product-agent:latest' "$tmp/bundle/docker-compose.yml"
+grep -q 'DIREXIO_AI_TOKEN: ${DIREXIO_AI_TOKEN:-}' "$tmp/bundle/docker-compose.yml"
+
+if grep -q '^      DIREXIO_AI_TOKEN=' "$tmp/user-data.yaml"; then
+  echo "rendered user-data must not write hosted AI tokens into /opt/p2p/.env by default" >&2
+  exit 1
+fi
 
 if grep -R -q '/etc/dendrite\|/var/dendrite\|dendrite.yaml' "$tmp/bundle"; then
   echo "rendered bundle must use direxio-message-server paths, not legacy dendrite paths" >&2
