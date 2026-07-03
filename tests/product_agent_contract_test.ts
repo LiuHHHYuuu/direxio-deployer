@@ -1,5 +1,7 @@
 #!/usr/bin/env tsx
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { createAgentServiceApp } from "../product-agent/src/lib/agent-service.js";
 import { createAiGatewayApp, createDefaultModelClient, ModelProviderError } from "../product-agent/src/lib/ai-gateway.js";
 import { createDevIntegrationApp } from "../product-agent/src/bin/dev-integration-server.js";
@@ -21,6 +23,7 @@ await testGatewayAuthAndSuccess();
 await testGatewayExplicitRealModelMode();
 await testGatewayHidesProviderDebugByDefault();
 await testGatewayShowsProviderDebugWhenEnabled();
+await testDirexioAiTokenGenerator();
 await testAgentIgnoresNonAiConversation();
 await testAgentRequiresHostedToken();
 await testAgentMapsGatewayErrors();
@@ -138,6 +141,17 @@ async function testGatewayShowsProviderDebugWhenEnabled(): Promise<void> {
   } finally {
     await app.close();
   }
+}
+
+async function testDirexioAiTokenGenerator(): Promise<void> {
+  const scriptPath = fileURLToPath(new URL("../product-agent/scripts/generate-token.mjs", import.meta.url));
+  const output = execFileSync(process.execPath, [scriptPath, "2"], { encoding: "utf8" })
+    .trim()
+    .split(/\r?\n/);
+  assert.equal(output.length, 2);
+  assert.match(output[0] || "", /^dxai_[A-Za-z0-9_-]{43}$/);
+  assert.match(output[1] || "", /^dxai_[A-Za-z0-9_-]{43}$/);
+  assert.notEqual(output[0], output[1]);
 }
 
 async function testAgentIgnoresNonAiConversation(): Promise<void> {

@@ -52,6 +52,21 @@ cd product-agent
 docker build -t direxio/product-agent:latest .
 ```
 
+Build the hosted `ai-gateway` container image:
+
+```bash
+cd product-agent
+docker build -f Dockerfile.ai-gateway -t ghcr.io/yingsuiai/direxio-ai-gateway:agent-mvp .
+```
+
+Generate one or more Direxio AI gateway tokens:
+
+```bash
+cd product-agent
+npm run token:generate
+npm run token:generate -- 3
+```
+
 ## Prototype Servers
 
 For Windows local development, copy the example env file and use the one-command starter:
@@ -139,3 +154,34 @@ Content-Type: application/json
 ```
 
 This endpoint passes the event through the same `POST /v1/message-server/new-message` path that future message-server wiring should call.
+
+## Hosted AI Gateway MVP
+
+The hosted gateway is the Direxio-operated service behind `https://ai.direxio.com`.
+It owns the real model provider key and validates Direxio-issued `dxai_...`
+tokens. Self-hosted customer servers only receive the Direxio token.
+
+Gateway runtime environment:
+
+```env
+DIREXIO_AI_GATEWAY_TOKENS=dxai_xxx,dxai_yyy
+DIREXIO_AI_GATEWAY_MODEL_MODE=openai-compatible
+DIREXIO_MODEL_BASE_URL=https://api.deepseek.com/v1
+DIREXIO_MODEL_API_KEY=<provider-api-key>
+DIREXIO_MODEL_NAME=deepseek-chat
+```
+
+Self-hosted node runtime environment:
+
+```env
+DIREXIO_AI_GATEWAY_URL=https://ai.direxio.com
+DIREXIO_AI_TOKEN=dxai_xxx
+DIREXIO_PRODUCT_AGENT_URL=http://product-agent:8797
+```
+
+`DIREXIO_AI_TOKEN` is not a DeepSeek/OpenAI key. It is a Direxio gateway token
+issued by the hosted gateway operator. The real provider API key must stay only
+on the hosted gateway host.
+
+The example compose file for the hosted side lives at
+`deploy/ai-gateway.compose.example.yml`.

@@ -7,6 +7,7 @@
     "build": "tsc -p tsconfig.build.json",
     "check": "tsc --noEmit",
     "test": "tsx ../tests/product_agent_contract_test.ts",
+    "token:generate": "node scripts/generate-token.mjs",
     "start:agent-service": "node dist/bin/agent-service.js",
     "start:ai-gateway": "node dist/bin/ai-gateway.js",
     "dev:agent-service": "tsx src/bin/agent-service.ts",

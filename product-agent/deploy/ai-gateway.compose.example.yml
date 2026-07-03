@@ -1,0 +1,14 @@
+services:
+  ai-gateway:
+    image: ${DIREXIO_AI_GATEWAY_IMAGE:-ghcr.io/yingsuiai/direxio-ai-gateway:agent-mvp}
+    restart: unless-stopped
+    environment:
+      DIREXIO_AI_GATEWAY_HOST: 0.0.0.0
+      DIREXIO_AI_GATEWAY_PORT: 8787
+      DIREXIO_AI_GATEWAY_TOKENS: ${DIREXIO_AI_GATEWAY_TOKENS:?set Direxio AI gateway tokens}
+      DIREXIO_AI_GATEWAY_MODEL_MODE: ${DIREXIO_AI_GATEWAY_MODEL_MODE:-openai-compatible}
+      DIREXIO_MODEL_BASE_URL: ${DIREXIO_MODEL_BASE_URL:?set model provider base URL}
+      DIREXIO_MODEL_API_KEY: ${DIREXIO_MODEL_API_KEY:?set model provider API key}
+      DIREXIO_MODEL_NAME: ${DIREXIO_MODEL_NAME:-deepseek-chat}
+    ports:
+      - "${DIREXIO_AI_GATEWAY_PORT:-8787}:8787"

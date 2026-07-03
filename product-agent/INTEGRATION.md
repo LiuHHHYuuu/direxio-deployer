@@ -150,6 +150,28 @@ DIREXIO_PRODUCT_AGENT_URL=http://product-agent:8797
 
 `DIREXIO_AI_TOKEN` must stay server-side. It must not be sent to the mobile app or written into public logs. `DIREXIO_PRODUCT_AGENT_URL` is also the feature switch: if empty, message-server does not forward agent-room messages.
 
+The hosted Direxio side runs `ai-gateway` separately from user servers. For the
+MVP it can use an environment-variable allowlist:
+
+```env
+DIREXIO_AI_GATEWAY_TOKENS=dxai_xxx,dxai_yyy
+DIREXIO_AI_GATEWAY_MODEL_MODE=openai-compatible
+DIREXIO_MODEL_BASE_URL=https://api.deepseek.com/v1
+DIREXIO_MODEL_API_KEY=<provider-api-key>
+DIREXIO_MODEL_NAME=deepseek-chat
+```
+
+Generate gateway tokens from this package:
+
+```bash
+cd product-agent
+npm run token:generate
+```
+
+`DIREXIO_MODEL_API_KEY` never leaves the hosted gateway. Customer deployments
+only receive `DIREXIO_AI_TOKEN`, so rotating a customer token does not require
+rotating the provider key.
+
 ## Implementation Boundary
 
 The bridge should stay narrow: only the built-in agent room is forwarded by default, and gateway-marked replies are ignored to prevent reply loops.
