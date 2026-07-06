@@ -224,7 +224,19 @@ function schemaForTool(name: string) {
       limit: z.number().int().min(1).max(20).optional().describe("Maximum matching messages to read.")
     });
   }
+  if (isExperienceCardTool(name)) {
+    return z.object({
+      focus: z.string().min(1).optional().describe("Optional focus for the private experience card."),
+      limit: z.number().int().min(1).max(20).optional().describe("Maximum current-thread user messages to consider.")
+    });
+  }
   return z.object({});
+}
+
+function isExperienceCardTool(name: string): boolean {
+  return name === "create_persona_card" ||
+    name === "create_memory_capsule" ||
+    name === "create_mood_card";
 }
 
 function buildSystemPrompt(memory: ThreadMemorySnapshot): string {

@@ -157,7 +157,22 @@ Current built-in tools are read-only:
 - `get_thread_memory`: reads explicit preferences remembered in this process.
 - `list_contacts`: uses contact data only if message-server includes it.
 - `web_search`: disabled by default; set `DIREXIO_AGENT_WEB_SEARCH=1` to enable the public web search adapter.
+- `create_persona_card`: creates a private Digital Persona Card from the current AI thread.
+- `create_memory_capsule`: creates a private recap card from the current AI thread.
+- `create_mood_card`: creates a private mood snapshot card from the current AI thread.
 - `mcp_current_thread_search`: disabled by default; searches only the current AI thread through an injected MCP client when `DIREXIO_AGENT_MCP_CURRENT_THREAD=1`.
+
+The first official experience abilities live in `src/lib/abilities`. They are
+not a third-party plugin market yet. They are small built-in manifests plus
+read-only tools that produce structured card payloads:
+
+- `persona-card`
+- `memory-capsule`
+- `mood-card`
+
+Each ability is private by default and declares current-thread-only read
+permissions. Future mobile work can render the returned
+`direxio.agent_experience_card.v1` payloads as native cards.
 
 Thread memory is process-local and scoped by `conversation_id`. It currently
 remembers simple explicit preferences such as concise or detailed reply style.

@@ -120,6 +120,30 @@ function selectToolInvocations(payload: GatewayChatRequest): AgentToolInvocation
     });
   }
 
+  if (containsAny(normalized, ["persona card", "digital persona", "profile card", "personality card"])) {
+    invocations.push({
+      name: "create_persona_card",
+      input: { focus: extractExperienceFocus(text), limit: 12 },
+      reason: "user_asked_for_persona_card"
+    });
+  }
+
+  if (containsAny(normalized, ["memory capsule", "thread recap", "weekly recap", "recap card"])) {
+    invocations.push({
+      name: "create_memory_capsule",
+      input: { focus: extractExperienceFocus(text), limit: 12 },
+      reason: "user_asked_for_memory_capsule"
+    });
+  }
+
+  if (containsAny(normalized, ["mood card", "status card", "mood snapshot"])) {
+    invocations.push({
+      name: "create_mood_card",
+      input: { focus: extractExperienceFocus(text), limit: 12 },
+      reason: "user_asked_for_mood_card"
+    });
+  }
+
   return dedupeInvocations(invocations);
 }
 
@@ -127,6 +151,12 @@ function extractSearchQuery(text: string): string {
   const trimmed = text.trim();
   const match = trimmed.match(/(?:搜索|search|find)\s*[:：]?\s*(.+)$/i);
   return match?.[1]?.trim() || trimmed;
+}
+
+function extractExperienceFocus(text: string): string {
+  const trimmed = text.trim();
+  const match = trimmed.match(/(?:persona card|digital persona|profile card|memory capsule|thread recap|weekly recap|recap card|mood card|status card|mood snapshot)\s*[:-]?\s*(.*)$/i);
+  return match?.[1]?.trim() || "";
 }
 
 function containsAny(value: string, needles: string[]): boolean {

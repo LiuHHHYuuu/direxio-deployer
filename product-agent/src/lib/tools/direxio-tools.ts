@@ -1,5 +1,6 @@
 import type { CurrentThreadMcpClient } from "../mcp/current-thread-mcp-client.js";
 import type { GatewayMessage } from "../types.js";
+import { createAgentExperienceTools } from "./agent-experience-tools.js";
 import { createMcpCurrentThreadTool } from "./mcp-current-thread-tool.js";
 import type { AgentTool, AgentToolContext, AgentToolResult } from "./types.js";
 
@@ -54,6 +55,7 @@ export function createDirexioReadOnlyTools(options: DirexioReadOnlyToolsOptions 
       description: "Search the public web when web search is explicitly enabled for this node.",
       run: async (input, context) => runWebSearch(input, context)
     },
+    ...createAgentExperienceTools(),
     createMcpCurrentThreadTool({ client: options.currentThreadMcpClient })
   ];
 }

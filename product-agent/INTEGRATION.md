@@ -138,6 +138,12 @@ private human chats by default. Any future cross-room or private-message tool
 must enforce explicit authorization outside the prompt, preferably in a
 deterministic policy layer before the tool runs.
 
+The official experience abilities follow the same rule. `persona-card`,
+`memory-capsule`, and `mood-card` are built-in manifests plus read-only tools
+that generate private `direxio.agent_experience_card.v1` payloads from the
+current AI thread and thread memory. They are not a third-party plugin market
+yet, and their output is private until a user explicitly chooses to share it.
+
 The MCP current-thread search hook keeps the same boundary. Its client receives
 only `nodeId`, `conversationId`, `query`, and `limit`, and it is disabled unless
 `DIREXIO_AGENT_MCP_CURRENT_THREAD=1` plus a runtime-injected client are both

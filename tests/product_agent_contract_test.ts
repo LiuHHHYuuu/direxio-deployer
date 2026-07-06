@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { createAgentServiceApp } from "../product-agent/src/lib/agent-service.js";
 import { createAiGatewayApp, createDefaultModelClient, ModelProviderError } from "../product-agent/src/lib/ai-gateway.js";
 import { createDevIntegrationApp } from "../product-agent/src/bin/dev-integration-server.js";
+import { officialExperienceAbilityManifests } from "../product-agent/src/lib/abilities/official-experience-abilities.js";
 import { toAgentMessageEvent } from "../product-agent/src/lib/message-server-adapter.js";
 import { callHostedGateway } from "../product-agent/src/lib/hosted-gateway-client.js";
 import type { CurrentThreadMcpClient, CurrentThreadSearchInput } from "../product-agent/src/lib/mcp/current-thread-mcp-client.js";
@@ -34,7 +35,10 @@ await testAgentRequiresHostedToken();
 await testAgentMapsGatewayErrors();
 await testAgentForwardsOnlyAllowedContext();
 await testAgentAddsCurrentThreadToolContext();
+testOfficialExperienceAbilitiesArePrivateByDefault();
+await testAgentAddsPersonaCardToolContext();
 await testLangChainRuntimeUsesGatewayToolCalls();
+await testLangChainRuntimeUsesExperienceCardToolCall();
 await testLangChainRuntimeExposesDisabledMcpCurrentThreadTool();
 await testLangChainRuntimeUsesFakeMcpCurrentThreadTool();
 await testLangChainRuntimeStopsAtModelCallLimit();
@@ -392,6 +396,53 @@ async function testAgentAddsCurrentThreadToolContext(): Promise<void> {
   }
 }
 
+function testOfficialExperienceAbilitiesArePrivateByDefault(): void {
+  assert.equal(officialExperienceAbilityManifests.length, 3);
+  for (const manifest of officialExperienceAbilityManifests) {
+    assert.equal(manifest.defaultVisibility, "private");
+    assert.equal(manifest.outputKind, "experience_card");
+    assert.equal(manifest.permissions.some((permission) => permission.scope === "current_ai_thread"), true);
+    assert.equal(manifest.permissions.some((permission) => permission.scope === "explicit_selected_context"), false);
+  }
+}
+
+async function testAgentAddsPersonaCardToolContext(): Promise<void> {
+  const captured: unknown[] = [];
+  const app = createAgentServiceApp({
+    aiToken: "dxai_ok",
+    gatewayUrl: "http://gateway.test",
+    fetchImpl: async (_url, init) => {
+      captured.push(JSON.parse(String(init?.body || "{}")));
+      return new Response(JSON.stringify({ reply: "persona card reply" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  });
+  await app.ready();
+  try {
+    const response = await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "persona-room",
+      secret_note: "must not appear in card",
+      messages: [
+        { sender: "user", content: "I am building an agent with LangChain and MCP tools." },
+        { sender: "user", content: "please create a persona card for my agent builder direction" }
+      ]
+    });
+    assert.equal(response.status, 200);
+    const messages = asRecord(captured[0]).messages as Array<Record<string, unknown>>;
+    assert.match(String(messages[0]?.content), /create_persona_card/);
+    assert.match(String(messages[0]?.content), /direxio\.agent_experience_card\.v1/);
+    assert.match(String(messages[0]?.content), /"defaultVisibility": "private"/);
+    assert.match(String(messages[0]?.content), /agent builder/);
+    assert.doesNotMatch(String(messages[0]?.content), /must not appear in card/);
+  } finally {
+    await app.close();
+  }
+}
+
 async function testLangChainRuntimeUsesGatewayToolCalls(): Promise<void> {
   const captured: unknown[] = [];
   const runtime = createLangChainAgentRuntime({
@@ -446,6 +497,67 @@ async function testLangChainRuntimeUsesGatewayToolCalls(): Promise<void> {
     });
     assert.equal(response.status, 200);
     assert.equal(response.body.reply, "final answer from tool");
+    assert.equal(captured.length, 2);
+  } finally {
+    await app.close();
+  }
+}
+
+async function testLangChainRuntimeUsesExperienceCardToolCall(): Promise<void> {
+  const captured: unknown[] = [];
+  const runtime = createLangChainAgentRuntime({
+    env: {} as NodeJS.ProcessEnv
+  });
+  const app = createAgentServiceApp({
+    aiToken: "dxai_ok",
+    gatewayUrl: "http://gateway.test",
+    runtime,
+    fetchImpl: async (_url, init) => {
+      const payload = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+      captured.push(payload);
+      if (captured.length === 1) {
+        const tools = payload.tools as Array<Record<string, unknown>>;
+        assert.equal(tools.some((item) => asRecord(asRecord(item).function).name === "create_memory_capsule"), true);
+        return new Response(JSON.stringify({
+          reply: "",
+          tool_calls: [{
+            id: "call_memory_1",
+            name: "create_memory_capsule",
+            args: { focus: "agent plugin ecosystem", limit: 4 },
+            type: "tool_call"
+          }]
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      const messages = payload.messages as Array<Record<string, unknown>>;
+      assert.equal(messages.some((message) =>
+        message.role === "tool" &&
+        message.tool_call_id === "call_memory_1" &&
+        String(message.content).includes("\"cardType\": \"memory_capsule\"") &&
+        String(message.content).includes("\"sourceScope\": \"current_ai_thread\"")
+      ), true);
+      return new Response(JSON.stringify({ reply: "memory capsule final" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  });
+  await app.ready();
+  try {
+    const response = await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "experience-langchain-room",
+      messages: [
+        { sender: "user", content: "We are designing official agent skills and plugin manifests." },
+        { sender: "user", content: "Make a memory capsule for this thread." }
+      ]
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.reply, "memory capsule final");
     assert.equal(captured.length, 2);
   } finally {
     await app.close();
