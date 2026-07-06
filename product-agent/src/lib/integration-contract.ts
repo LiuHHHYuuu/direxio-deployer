@@ -1,4 +1,5 @@
 import type { GatewayMessage } from "./types.js";
+import type { AgentActionName } from "./abilities/types.js";
 
 /**
  * Internal product-agent conversation type for messages intentionally
@@ -24,6 +25,9 @@ export interface AgentMessageEvent {
   /** Recent messages from the AI conversation only, ordered oldest to newest. */
   messages: AgentConversationMessage[];
 
+  /** Optional structured action selected from the Direxio AI action menu. */
+  agent_action?: AgentActionRequest;
+
   /** Optional task hint, for example "chat", "rewrite", "translate", or "summarize". */
   task?: string;
 
@@ -42,6 +46,18 @@ export interface AgentMessageEvent {
  * ids and timestamps, but content is the only required model input for the MVP.
  */
 export interface AgentConversationMessage {
+  /** Structured action message created by the in-app action menu. */
+  type?: "agent_action";
+
+  /** Action name when type is "agent_action". */
+  action?: AgentActionName;
+
+  /** Optional action focus shown in the result. */
+  focus?: string;
+
+  /** Optional limit for current-thread messages considered by the action. */
+  limit?: number;
+
   /** "agent" is normalized to assistant; every other unknown sender becomes user. */
   sender?: "user" | "agent" | "assistant";
 
@@ -49,7 +65,14 @@ export interface AgentConversationMessage {
   role?: GatewayMessage["role"];
 
   /** Text that the user or AI sent inside the AI conversation. */
-  content: string;
+  content?: string;
+}
+
+export interface AgentActionRequest {
+  type: "agent_action";
+  action: AgentActionName;
+  focus?: string;
+  limit?: number;
 }
 
 /**

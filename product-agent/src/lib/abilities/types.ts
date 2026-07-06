@@ -11,26 +11,37 @@ export interface AgentAbilityPermission {
 
 export interface AgentAbilityManifest {
   id: string;
+  action: AgentActionName;
   title: string;
+  shortTitle: string;
   description: string;
   permissions: AgentAbilityPermission[];
   defaultVisibility: "private";
-  outputKind: "experience_card";
+  outputKind: "agent_action_result";
 }
 
-export interface AgentExperienceCardSection {
-  label: string;
-  value: string | string[];
-}
+export type AgentActionName = "persona_card" | "memory_capsule" | "mood_card";
 
-export interface AgentExperienceCard {
-  schema: "direxio.agent_experience_card.v1";
-  cardType: "persona_card" | "memory_capsule" | "mood_card";
+export interface AgentActionMenuItem {
+  action: AgentActionName;
   title: string;
   subtitle: string;
-  highlights: string[];
-  sections: AgentExperienceCardSection[];
-  prompts: string[];
+  icon: "user" | "archive" | "sparkles";
+}
+
+export interface AgentActionMenu {
+  schema: "direxio.agent_action_menu.v1";
+  title: string;
+  items: AgentActionMenuItem[];
+}
+
+export interface AgentActionResult {
+  schema: "direxio.agent_action_result.v1";
+  action: AgentActionName;
+  title: string;
+  summary: string;
+  points: string[];
+  nextActions: string[];
   privacy: {
     sourceScope: "current_ai_thread";
     defaultVisibility: "private";

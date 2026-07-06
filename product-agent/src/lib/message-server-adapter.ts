@@ -2,6 +2,10 @@ import type {
   AgentConversationMessage,
   AgentMessageEvent
 } from "./integration-contract.js";
+import {
+  agentActionToMessageContent,
+  normalizeAgentAction
+} from "./abilities/action-protocol.js";
 import { DIREXIO_AI_CONVERSATION_TYPE } from "./integration-contract.js";
 
 /**
@@ -18,7 +22,8 @@ export interface MessageServerNewMessageEvent {
   conversation_type: string;
   sender_id?: string;
   sender_kind?: "user" | "agent" | "assistant" | "system";
-  content: string;
+  content?: string;
+  agent_action?: unknown;
   recent_messages?: AgentConversationMessage[];
   task?: string;
   model?: string;
@@ -48,7 +53,8 @@ export function toAgentMessageEvent(event: MessageServerNewMessageEvent): Adapte
     return { ignored: true, reason: "not_ai_conversation" };
   }
 
-  const content = event.content.trim();
+  const action = normalizeAgentAction(event.agent_action);
+  const content = action ? agentActionToMessageContent(action) : (event.content || "").trim();
   if (!content) {
     return { ignored: true, reason: "empty_message" };
   }
@@ -63,6 +69,7 @@ export function toAgentMessageEvent(event: MessageServerNewMessageEvent): Adapte
     node_id: event.node_id,
     conversation_id: conversationIdForMessageServerEvent(event),
     messages,
+    ...(action ? { agent_action: action } : {}),
     task: event.task,
     model: event.model,
     selected_context: event.selected_context,

@@ -164,15 +164,34 @@ Current built-in tools are read-only:
 
 The first official experience abilities live in `src/lib/abilities`. They are
 not a third-party plugin market yet. They are small built-in manifests plus
-read-only tools that produce structured card payloads:
+read-only tools that produce compact structured action results:
 
 - `persona-card`
 - `memory-capsule`
 - `mood-card`
 
 Each ability is private by default and declares current-thread-only read
-permissions. Future mobile work can render the returned
-`direxio.agent_experience_card.v1` payloads as native cards.
+permissions. App surfaces can fetch the button menu from:
+
+```http
+GET /v1/agent/actions
+```
+
+The endpoint returns `direxio.agent_action_menu.v1`. When the user taps a
+button, message-server can forward a structured action in the AI room event:
+
+```json
+{
+  "agent_action": {
+    "type": "agent_action",
+    "action": "persona_card"
+  }
+}
+```
+
+Supported actions are `persona_card`, `memory_capsule`, and `mood_card`.
+Tools return `direxio.agent_action_result.v1` with one summary, up to three
+points, and one or two next actions so the chat reply stays short.
 
 Thread memory is process-local and scoped by `conversation_id`. It currently
 remembers simple explicit preferences such as concise or detailed reply style.

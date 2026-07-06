@@ -1,5 +1,6 @@
 import type { FetchLike, GatewayChatRequest, GatewayMessage } from "../types.js";
 import type { ThreadMemorySnapshot } from "../memory/thread-memory.js";
+import { parseAgentActionContent, toolNameForAgentAction } from "../abilities/action-protocol.js";
 import { authorizeToolInvocation } from "./policy.js";
 import type { AgentTool, AgentToolContext, AgentToolInvocation, AgentToolResult } from "./types.js";
 
@@ -56,7 +57,7 @@ export function toolResultsAsSystemMessage(results: AgentToolResult[]): GatewayM
     role: "system",
     content: [
       "Direxio local tool context:",
-      ...results.map((result) => `- ${result.name} (${result.ok ? "ok" : "error"}):\n${result.content}`)
+      ...results.map((result) => `- ${result.name} (${result.ok ? "ok" : "error"}):\n${formatToolResultContent(result.content)}`)
     ].join("\n")
   };
 }
@@ -78,6 +79,16 @@ function selectToolInvocations(payload: GatewayChatRequest): AgentToolInvocation
   const text = latestUser?.content || "";
   const normalized = text.toLowerCase();
   const invocations: AgentToolInvocation[] = [];
+  const action = parseAgentActionContent(text);
+
+  if (action) {
+    invocations.push({
+      name: toolNameForAgentAction(action.action),
+      input: { focus: action.focus || "", limit: action.limit || 8 },
+      reason: "user_selected_agent_action"
+    });
+    return dedupeInvocations(invocations);
+  }
 
   if (containsAny(normalized, ["最近", "recent", "history", "上下文"])) {
     invocations.push({
@@ -157,6 +168,36 @@ function extractExperienceFocus(text: string): string {
   const trimmed = text.trim();
   const match = trimmed.match(/(?:persona card|digital persona|profile card|memory capsule|thread recap|weekly recap|recap card|mood card|status card|mood snapshot)\s*[:-]?\s*(.*)$/i);
   return match?.[1]?.trim() || "";
+}
+
+function formatToolResultContent(content: string): string {
+  const parsed = parseJsonRecord(content);
+  if (parsed.schema !== "direxio.agent_action_result.v1") return content;
+  const points = Array.isArray(parsed.points)
+    ? parsed.points.filter((point): point is string => typeof point === "string").slice(0, 3)
+    : [];
+  const nextActions = Array.isArray(parsed.nextActions)
+    ? parsed.nextActions.filter((action): action is string => typeof action === "string").slice(0, 1)
+    : [];
+  return [
+    stringField(parsed.title),
+    stringField(parsed.summary),
+    ...points.map((point) => `- ${point}`),
+    ...nextActions.map((action) => `Next: ${action}`)
+  ].filter(Boolean).join("\n");
+}
+
+function parseJsonRecord(value: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return typeof parsed === "object" && parsed !== null ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function stringField(value: unknown): string {
+  return typeof value === "string" ? value : "";
 }
 
 function containsAny(value: string, needles: string[]): boolean {

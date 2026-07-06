@@ -36,6 +36,8 @@ await testAgentMapsGatewayErrors();
 await testAgentForwardsOnlyAllowedContext();
 await testAgentAddsCurrentThreadToolContext();
 testOfficialExperienceAbilitiesArePrivateByDefault();
+await testAgentActionMenuEndpoint();
+await testAgentActionMessageAddsCompactToolContext();
 await testAgentAddsPersonaCardToolContext();
 await testLangChainRuntimeUsesGatewayToolCalls();
 await testLangChainRuntimeUsesExperienceCardToolCall();
@@ -48,6 +50,7 @@ await testAgentServiceMessageServerEndpointIgnoresNonAiConversation();
 await testAgentServiceMessageServerEndpointReturnsOutboundMessage();
 await testMessageServerAdapterIgnoresNonAiConversations();
 await testMessageServerAdapterBuildsAgentEvent();
+await testMessageServerAdapterBuildsAgentActionEvent();
 await testMessageServerAdapterAcceptsNativeAgentConversation();
 await testDevIntegrationServerEndToEnd();
 
@@ -400,9 +403,73 @@ function testOfficialExperienceAbilitiesArePrivateByDefault(): void {
   assert.equal(officialExperienceAbilityManifests.length, 3);
   for (const manifest of officialExperienceAbilityManifests) {
     assert.equal(manifest.defaultVisibility, "private");
-    assert.equal(manifest.outputKind, "experience_card");
+    assert.equal(manifest.outputKind, "agent_action_result");
+    assert.equal(typeof manifest.action, "string");
     assert.equal(manifest.permissions.some((permission) => permission.scope === "current_ai_thread"), true);
     assert.equal(manifest.permissions.some((permission) => permission.scope === "explicit_selected_context"), false);
+  }
+}
+
+async function testAgentActionMenuEndpoint(): Promise<void> {
+  const app = createAgentServiceApp({
+    aiToken: "dxai_ok",
+    gatewayUrl: "http://gateway.test",
+    fetchImpl: async () => {
+      throw new Error("gateway should not be called");
+    }
+  });
+  await app.ready();
+  try {
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/agent/actions",
+      headers: {}
+    });
+    const body = response.json() as Record<string, unknown>;
+    const items = body.items as Array<Record<string, unknown>>;
+    assert.equal(response.statusCode, 200);
+    assert.equal(body.schema, "direxio.agent_action_menu.v1");
+    assert.equal(items.length, 3);
+    assert.deepEqual(items.map((item) => item.action), ["persona_card", "memory_capsule", "mood_card"]);
+  } finally {
+    await app.close();
+  }
+}
+
+async function testAgentActionMessageAddsCompactToolContext(): Promise<void> {
+  const captured: unknown[] = [];
+  const app = createAgentServiceApp({
+    aiToken: "dxai_ok",
+    gatewayUrl: "http://gateway.test",
+    fetchImpl: async (_url, init) => {
+      captured.push(JSON.parse(String(init?.body || "{}")));
+      return new Response(JSON.stringify({ reply: "mood card reply" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  });
+  await app.ready();
+  try {
+    const response = await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "action-room",
+      messages: [
+        { sender: "user", content: "I want to keep this product feeling light." },
+        { type: "agent_action", action: "mood_card", focus: "today" }
+      ]
+    });
+    assert.equal(response.status, 200);
+    const messages = asRecord(captured[0]).messages as Array<Record<string, unknown>>;
+    const context = String(messages[0]?.content);
+    assert.match(context, /create_mood_card/);
+    assert.match(context, /Mood Card/);
+    assert.match(context, /Current mood reads as/);
+    assert.doesNotMatch(context, /direxio\.agent_action_result\.v1/);
+    assert.equal(context.length < 700, true);
+  } finally {
+    await app.close();
   }
 }
 
@@ -433,11 +500,12 @@ async function testAgentAddsPersonaCardToolContext(): Promise<void> {
     });
     assert.equal(response.status, 200);
     const messages = asRecord(captured[0]).messages as Array<Record<string, unknown>>;
+    const context = String(messages[0]?.content);
     assert.match(String(messages[0]?.content), /create_persona_card/);
-    assert.match(String(messages[0]?.content), /direxio\.agent_experience_card\.v1/);
-    assert.match(String(messages[0]?.content), /"defaultVisibility": "private"/);
-    assert.match(String(messages[0]?.content), /agent builder/);
+    assert.match(context, /Digital Persona Card/);
+    assert.match(context, /Main focus: agent building/);
     assert.doesNotMatch(String(messages[0]?.content), /must not appear in card/);
+    assert.equal(context.length < 700, true);
   } finally {
     await app.close();
   }
@@ -536,8 +604,9 @@ async function testLangChainRuntimeUsesExperienceCardToolCall(): Promise<void> {
       assert.equal(messages.some((message) =>
         message.role === "tool" &&
         message.tool_call_id === "call_memory_1" &&
-        String(message.content).includes("\"cardType\": \"memory_capsule\"") &&
-        String(message.content).includes("\"sourceScope\": \"current_ai_thread\"")
+        String(message.content).includes("\"schema\": \"direxio.agent_action_result.v1\"") &&
+        String(message.content).includes("\"action\": \"memory_capsule\"") &&
+        String(message.content).includes("\"points\"")
       ), true);
       return new Response(JSON.stringify({ reply: "memory capsule final" }), {
         status: 200,
@@ -896,6 +965,25 @@ function testMessageServerAdapterBuildsAgentEvent(): void {
   assert.equal(adapted.messages[1]?.content, "hello ai");
   assert.equal(adapted.selected_context, "selected text");
   assert.equal(adapted.context_authorized, true);
+}
+
+function testMessageServerAdapterBuildsAgentActionEvent(): void {
+  const adapted = toAgentMessageEvent({
+    node_id: "node-1",
+    conversation_id: "ai-room",
+    conversation_type: "direxio_ai",
+    sender_kind: "user",
+    agent_action: {
+      type: "agent_action",
+      action: "persona_card",
+      focus: "short profile"
+    }
+  });
+  assert.equal("ignored" in adapted, false);
+  if ("ignored" in adapted) return;
+  assert.equal(adapted.agent_action?.action, "persona_card");
+  assert.match(adapted.messages.at(-1)?.content || "", /"type":"agent_action"/);
+  assert.match(adapted.messages.at(-1)?.content || "", /"action":"persona_card"/);
 }
 
 function testMessageServerAdapterAcceptsNativeAgentConversation(): void {

@@ -3,7 +3,7 @@ import {
   createMoodCard,
   createPersonaCard
 } from "../abilities/official-experience-abilities.js";
-import type { AgentExperienceCard } from "../abilities/types.js";
+import type { AgentActionResult } from "../abilities/types.js";
 import type { GatewayMessage } from "../types.js";
 import type { AgentTool, AgentToolContext, AgentToolResult } from "./types.js";
 
@@ -54,10 +54,10 @@ function stringInput(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function ok(name: string, card: AgentExperienceCard): AgentToolResult {
+function ok(name: string, result: AgentActionResult): AgentToolResult {
   return {
     name,
     ok: true,
-    content: JSON.stringify(card, null, 2)
+    content: JSON.stringify(result, null, 2)
   };
 }

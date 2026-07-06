@@ -140,9 +140,23 @@ deterministic policy layer before the tool runs.
 
 The official experience abilities follow the same rule. `persona-card`,
 `memory-capsule`, and `mood-card` are built-in manifests plus read-only tools
-that generate private `direxio.agent_experience_card.v1` payloads from the
-current AI thread and thread memory. They are not a third-party plugin market
-yet, and their output is private until a user explicitly chooses to share it.
+that generate private `direxio.agent_action_result.v1` payloads from the current
+AI thread and thread memory. They are not a third-party plugin market yet, and
+their output is private until a user explicitly chooses to share it. Mobile can
+render a function button by reading `GET /v1/agent/actions`, then forwarding:
+
+```json
+{
+  "agent_action": {
+    "type": "agent_action",
+    "action": "memory_capsule"
+  }
+}
+```
+
+The action result should stay compact: one title, one summary, up to three
+points, and one short next action. Long explanations should be opt-in, not the
+default action-button response.
 
 The MCP current-thread search hook keeps the same boundary. Its client receives
 only `nodeId`, `conversationId`, `query`, and `limit`, and it is disabled unless

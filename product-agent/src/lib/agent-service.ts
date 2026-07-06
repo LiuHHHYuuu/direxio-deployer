@@ -1,4 +1,9 @@
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
+import {
+  agentActionToMessageContent,
+  normalizeAgentAction
+} from "./abilities/action-protocol.js";
+import { createAgentActionMenu } from "./abilities/official-experience-abilities.js";
 import { toAgentMessageEvent, type MessageServerNewMessageEvent } from "./message-server-adapter.js";
 import { createAgentRuntime } from "./runtime/index.js";
 import type { AgentRuntime } from "./runtime/types.js";
@@ -38,6 +43,10 @@ export function createAgentServiceApp(options: AgentServiceOptions = {}): Fastif
         message: "Product agent failed unexpectedly."
       }
     });
+  });
+
+  app.get("/v1/agent/actions", async (_request, reply) => {
+    return reply.status(200).send(createAgentActionMenu());
   });
 
   app.post("/v1/agent/messages", async (request, reply) => {
@@ -129,7 +138,7 @@ async function handleAgentMessageEvent({
 export function buildGatewayChatPayload(event: Record<string, unknown>): GatewayChatRequest {
   const conversationId = requiredString(event.conversation_id, "conversation_id");
   const nodeId = stringOrDefault(event.node_id, "unknown-node");
-  const messages = normalizeMessages(event.messages);
+  const messages = normalizeMessages(event.messages, event.agent_action);
 
   const gatewayMessages: GatewayMessage[] = [];
   if (event.context_authorized === true && typeof event.selected_context === "string" && event.selected_context.trim()) {
@@ -149,17 +158,33 @@ export function buildGatewayChatPayload(event: Record<string, unknown>): Gateway
   };
 }
 
-function normalizeMessages(messages: unknown): GatewayMessage[] {
+function normalizeMessages(messages: unknown, agentAction?: unknown): GatewayMessage[] {
+  const normalizedAgentAction = normalizeAgentAction(agentAction);
   if (!Array.isArray(messages) || messages.length === 0) {
+    if (normalizedAgentAction) {
+      return [{ role: "user", content: agentActionToMessageContent(normalizedAgentAction) }];
+    }
     throw new Error("messages must be a non-empty array");
   }
-  return messages.map((message, index) => {
+  const normalized = messages.map((message, index) => {
     const item = asRecord(message);
+    const actionContent = actionMessageContent(item);
+    if (actionContent) {
+      return { role: "user" as const, content: actionContent };
+    }
     const content = requiredString(item.content, `messages[${index}].content`);
     const rawRole = item.role || item.sender || "user";
     const role: GatewayMessage["role"] = rawRole === "assistant" || rawRole === "agent" ? "assistant" : "user";
     return { role, content };
   });
+  return normalizedAgentAction
+    ? [...normalized, { role: "user", content: agentActionToMessageContent(normalizedAgentAction) }]
+    : normalized;
+}
+
+function actionMessageContent(item: Record<string, unknown>): string {
+  const action = normalizeAgentAction(item);
+  return action ? agentActionToMessageContent(action) : "";
 }
 
 function requiredString(value: unknown, name: string): string {
