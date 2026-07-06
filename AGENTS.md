@@ -96,3 +96,22 @@ If a validation cannot be run on the current host, record the reason and run the
 - Keep unrelated deployment behavior untouched unless the same abstraction owns it.
 - Self-review diffs before committing.
 - Commit finished work on the active branch with a focused message. Do not stage generated credentials, local state, binaries, logs, `.codegraph/`, or machine-specific test artifacts.
+
+## Change Explanation Standard
+
+When explaining a meaningful implementation change, especially product-agent
+work, structure the handoff so a vibecoder can understand the reason, mechanism,
+evidence, and debugging path:
+
+- Facing problem: explain the real problem the change solves, and why the old
+  mechanism was not enough.
+- Method attempted: describe which modules, data tables, scripts, pages, or evals
+  changed. If a tried approach was abandoned, briefly explain why.
+- Basis: explain why this approach was selected. The basis can come from project
+  principles, existing evals, user feedback, system design goals, or engineering
+  constraints.
+- Eval result: list the commands that were run, which cases passed, and any
+  incomplete evals with their risk.
+- Vibecoder essentials: explain the new feature's data flow, key function
+  responsibilities, the meaning of any new tables, fields, indexes, or config,
+  and how to debug, verify, and find the first place to look when it breaks.
