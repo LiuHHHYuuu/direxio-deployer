@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance } from "fastify";
-import type { GatewayChatRequest, GatewayMessage, ModelClient, TokenVerifier } from "./types.js";
+import type {
+  GatewayChatRequest,
+  GatewayMessage,
+  GatewayToolCall,
+  GatewayToolDefinition,
+  ModelClient,
+  TokenVerifier
+} from "./types.js";
 
 export interface AiGatewayOptions {
   verifyToken?: TokenVerifier;
@@ -89,6 +96,7 @@ export function createAiGatewayApp(options: AiGatewayOptions = {}): FastifyInsta
       const result = await modelClient(chat);
       return reply.status(200).send({
         reply: result.reply,
+        tool_calls: result.tool_calls || [],
         request_id: result.request_id || randomUUID(),
         usage: result.usage || null
       });
@@ -114,12 +122,16 @@ export function validateChatRequest(body: unknown): GatewayChatRequest {
   const nodeId = requiredString(record.node_id, "node_id");
   const conversationId = requiredString(record.conversation_id, "conversation_id");
   const messages = normalizeMessages(record.messages);
+  const tools = normalizeTools(record.tools);
+  const toolChoice = normalizeToolChoice(record.tool_choice);
   return {
     node_id: nodeId,
     conversation_id: conversationId,
     task: optionalString(record.task, "chat"),
     model: optionalString(record.model, "default"),
-    messages
+    messages,
+    ...(tools.length ? { tools } : {}),
+    ...(toolChoice ? { tool_choice: toolChoice } : {})
   };
 }
 
@@ -186,8 +198,10 @@ export function createOpenAICompatibleClient(options: {
       },
       body: JSON.stringify({
         model,
-        messages: chat.messages,
-        temperature: 0.7
+        messages: chat.messages.map(toOpenAIMessage),
+        temperature: 0.7,
+        ...(chat.tools?.length ? { tools: chat.tools } : {}),
+        ...(chat.tool_choice ? { tool_choice: chat.tool_choice } : {})
       })
     });
     const body = await response.json().catch(() => ({})) as Record<string, unknown>;
@@ -206,11 +220,13 @@ export function createOpenAICompatibleClient(options: {
     const firstChoice = asRecord(choices[0]);
     const message = asRecord(firstChoice.message);
     const reply = message.content;
-    if (typeof reply !== "string" || reply.length === 0) {
+    const toolCalls = normalizeProviderToolCalls(message.tool_calls);
+    if ((typeof reply !== "string" || reply.length === 0) && toolCalls.length === 0) {
       throw new ModelProviderError("model provider returned no reply", 502, "provider_bad_response");
     }
     return {
-      reply,
+      reply: typeof reply === "string" ? reply : "",
+      tool_calls: toolCalls,
       usage: body.usage || null
     };
   };
@@ -229,12 +245,124 @@ function normalizeMessages(messages: unknown): GatewayMessage[] {
   return messages.map((message, index) => {
     const item = asRecord(message);
     const rawRole = item.role;
-    const role: GatewayMessage["role"] = rawRole === "assistant" || rawRole === "system" ? rawRole : "user";
+    const role: GatewayMessage["role"] =
+      rawRole === "assistant" || rawRole === "system" || rawRole === "tool" ? rawRole : "user";
+    const toolCalls = normalizeToolCalls(item.tool_calls, `messages[${index}].tool_calls`);
+    const toolCallId = optionalString(item.tool_call_id, "");
+    if (role === "tool" && !toolCallId) {
+      throw new Error(`messages[${index}].tool_call_id must be provided for tool messages`);
+    }
     return {
       role,
-      content: requiredString(item.content, `messages[${index}].content`)
+      content: messageContent(item.content, `messages[${index}].content`, role === "assistant" && toolCalls.length > 0),
+      ...(toolCallId ? { tool_call_id: toolCallId } : {}),
+      ...(typeof item.name === "string" && item.name.trim() ? { name: item.name.trim() } : {}),
+      ...(toolCalls.length ? { tool_calls: toolCalls } : {})
     };
   });
+}
+
+function normalizeTools(tools: unknown): GatewayToolDefinition[] {
+  if (tools === undefined) return [];
+  if (!Array.isArray(tools)) {
+    throw new Error("tools must be an array when provided");
+  }
+  return tools.map((toolDefinition, index) => {
+    const item = asRecord(toolDefinition);
+    const functionDefinition = asRecord(item.function);
+    return {
+      type: "function" as const,
+      function: {
+        name: requiredString(functionDefinition.name, `tools[${index}].function.name`),
+        ...(typeof functionDefinition.description === "string" && functionDefinition.description.trim()
+          ? { description: functionDefinition.description.trim() }
+          : {}),
+        parameters: asRecord(functionDefinition.parameters)
+      }
+    };
+  });
+}
+
+function normalizeToolChoice(value: unknown): "auto" | "none" | undefined {
+  return value === "auto" || value === "none" ? value : undefined;
+}
+
+function normalizeToolCalls(value: unknown, name: string): GatewayToolCall[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error(`${name} must be an array when provided`);
+  }
+  return value.map((toolCall, index) => {
+    const item = asRecord(toolCall);
+    return {
+      id: requiredString(item.id, `${name}[${index}].id`),
+      name: requiredString(item.name, `${name}[${index}].name`),
+      args: asRecord(item.args),
+      type: "tool_call" as const
+    };
+  });
+}
+
+function normalizeProviderToolCalls(value: unknown): GatewayToolCall[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((toolCall) => {
+      const item = asRecord(toolCall);
+      const functionCall = asRecord(item.function);
+      const name = typeof functionCall.name === "string" ? functionCall.name.trim() : "";
+      if (!name) return null;
+      return {
+        id: typeof item.id === "string" && item.id.trim() ? item.id.trim() : randomUUID(),
+        name,
+        args: parseToolArguments(functionCall.arguments),
+        type: "tool_call" as const
+      };
+    })
+    .filter((toolCall): toolCall is GatewayToolCall => Boolean(toolCall));
+}
+
+function parseToolArguments(value: unknown): Record<string, unknown> {
+  if (typeof value !== "string") return asRecord(value);
+  try {
+    return asRecord(JSON.parse(value));
+  } catch {
+    return {};
+  }
+}
+
+function toOpenAIMessage(message: GatewayMessage): Record<string, unknown> {
+  const openAIMessage: Record<string, unknown> = {
+    role: message.role,
+    content: message.content
+  };
+  if (message.name) {
+    openAIMessage.name = message.name;
+  }
+  if (message.role === "tool" && message.tool_call_id) {
+    openAIMessage.tool_call_id = message.tool_call_id;
+  }
+  if (message.tool_calls?.length) {
+    openAIMessage.tool_calls = message.tool_calls.map((toolCall) => ({
+      id: toolCall.id,
+      type: "function",
+      function: {
+        name: toolCall.name,
+        arguments: JSON.stringify(toolCall.args || {})
+      }
+    }));
+  }
+  return openAIMessage;
+}
+
+function messageContent(value: unknown, name: string, allowEmpty = false): string {
+  if (typeof value !== "string") {
+    if (allowEmpty && value === undefined) return "";
+    throw new Error(`${name} must be a string`);
+  }
+  if (!allowEmpty && value.trim().length === 0) {
+    throw new Error(`${name} must be a non-empty string`);
+  }
+  return allowEmpty ? value : value.trim();
 }
 
 function requiredString(value: unknown, name: string): string {

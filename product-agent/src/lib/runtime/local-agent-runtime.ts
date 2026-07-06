@@ -1,8 +1,10 @@
 import { InMemoryThreadMemoryStore, type ThreadMemoryStore } from "../memory/thread-memory.js";
+import { callHostedGateway } from "../hosted-gateway-client.js";
 import { createDirexioReadOnlyTools } from "../tools/direxio-tools.js";
 import { memoryAsSystemMessage, runSelectedAgentTools, toolResultsAsSystemMessage } from "../tools/runner.js";
 import type { AgentTool } from "../tools/types.js";
 import type { FetchLike, GatewayChatRequest } from "../types.js";
+import type { AgentRuntime, AgentRuntimeRunOptions } from "./types.js";
 
 export interface LocalAgentRuntimeOptions {
   memoryStore?: ThreadMemoryStore;
@@ -21,7 +23,7 @@ export interface PreparedAgentPayload {
   rememberAssistantReply(reply: string): void;
 }
 
-export interface LocalAgentRuntime {
+export interface LocalAgentRuntime extends AgentRuntime {
   preparePayload(options: PrepareAgentPayloadOptions): Promise<PreparedAgentPayload>;
 }
 
@@ -32,6 +34,22 @@ export function createLocalAgentRuntime(options: LocalAgentRuntimeOptions = {}):
   const env = options.env || process.env;
 
   return {
+    async run(options: AgentRuntimeRunOptions) {
+      const prepared = await this.preparePayload({
+        event: options.event,
+        payload: options.payload
+      });
+      const gatewayResponse = await callHostedGateway({
+        gatewayUrl: options.gatewayUrl,
+        aiToken: options.aiToken,
+        payload: prepared.payload,
+        fetchImpl: options.fetchImpl || fetchImpl
+      });
+      if (gatewayResponse.ok) {
+        prepared.rememberAssistantReply(gatewayResponse.reply);
+      }
+      return gatewayResponse;
+    },
     async preparePayload({ event, payload }) {
       memoryStore.rememberMessages(payload.conversation_id, payload.messages);
       const memory = memoryStore.snapshot(payload.conversation_id);

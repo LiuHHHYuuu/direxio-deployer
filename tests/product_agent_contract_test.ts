@@ -6,6 +6,7 @@ import { createAgentServiceApp } from "../product-agent/src/lib/agent-service.js
 import { createAiGatewayApp, createDefaultModelClient, ModelProviderError } from "../product-agent/src/lib/ai-gateway.js";
 import { createDevIntegrationApp } from "../product-agent/src/bin/dev-integration-server.js";
 import { toAgentMessageEvent } from "../product-agent/src/lib/message-server-adapter.js";
+import { createLangChainAgentRuntime } from "../product-agent/src/lib/runtime/langchain-runtime.js";
 
 interface InjectableApp {
   inject(options: {
@@ -21,6 +22,7 @@ interface InjectableApp {
 
 await testGatewayAuthAndSuccess();
 await testGatewayExplicitRealModelMode();
+await testGatewayForwardsOpenAIToolDefinitionsAndCalls();
 await testGatewayHidesProviderDebugByDefault();
 await testGatewayShowsProviderDebugWhenEnabled();
 await testDirexioAiTokenGenerator();
@@ -29,6 +31,7 @@ await testAgentRequiresHostedToken();
 await testAgentMapsGatewayErrors();
 await testAgentForwardsOnlyAllowedContext();
 await testAgentAddsCurrentThreadToolContext();
+await testLangChainRuntimeUsesGatewayToolCalls();
 await testAgentRemembersThreadPreferences();
 await testAgentWebSearchIsDisabledByDefault();
 await testAgentServiceMessageServerEndpointIgnoresNonAiConversation();
@@ -91,6 +94,61 @@ async function testGatewayExplicitRealModelMode(): Promise<void> {
     messages: [{ role: "user", content: "hello" }]
   });
   assert.equal(result.reply, "real-model-reply");
+}
+
+async function testGatewayForwardsOpenAIToolDefinitionsAndCalls(): Promise<void> {
+  const modelClient = createDefaultModelClient({
+    env: {
+      DIREXIO_AI_GATEWAY_MODEL_MODE: "openai-compatible",
+      DIREXIO_MODEL_API_KEY: "provider_test_key",
+      DIREXIO_MODEL_BASE_URL: "http://provider.test/v1",
+      DIREXIO_MODEL_NAME: "test-model"
+    } as NodeJS.ProcessEnv,
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+      const tools = body.tools as Array<Record<string, unknown>>;
+      const firstTool = asRecord(tools[0]);
+      const firstFunction = asRecord(firstTool.function);
+      assert.equal(firstFunction.name, "search_current_ai_thread");
+      return new Response(JSON.stringify({
+        choices: [{
+          message: {
+            content: "",
+            tool_calls: [{
+              id: "call_1",
+              type: "function",
+              function: {
+                name: "search_current_ai_thread",
+                arguments: "{\"query\":\"LangChain\"}"
+              }
+            }]
+          }
+        }],
+        usage: { total_tokens: 18 }
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  });
+  const result = await modelClient({
+    node_id: "node-1",
+    conversation_id: "ai-room",
+    task: "chat",
+    model: "default",
+    messages: [{ role: "user", content: "search LangChain" }],
+    tools: [{
+      type: "function",
+      function: {
+        name: "search_current_ai_thread",
+        parameters: { type: "object" }
+      }
+    }]
+  });
+  assert.equal(result.reply, "");
+  assert.equal(result.tool_calls?.[0]?.id, "call_1");
+  assert.equal(result.tool_calls?.[0]?.name, "search_current_ai_thread");
+  assert.deepEqual(result.tool_calls?.[0]?.args, { query: "LangChain" });
 }
 
 async function testGatewayHidesProviderDebugByDefault(): Promise<void> {
@@ -298,6 +356,66 @@ async function testAgentAddsCurrentThreadToolContext(): Promise<void> {
     assert.match(String(messages[0]?.content), /Direxio local tool context/);
     assert.match(String(messages[0]?.content), /search_current_ai_thread/);
     assert.match(String(messages[0]?.content), /Alice mentioned LangChain tools/);
+  } finally {
+    await app.close();
+  }
+}
+
+async function testLangChainRuntimeUsesGatewayToolCalls(): Promise<void> {
+  const captured: unknown[] = [];
+  const runtime = createLangChainAgentRuntime({
+    env: {} as NodeJS.ProcessEnv
+  });
+  const app = createAgentServiceApp({
+    aiToken: "dxai_ok",
+    gatewayUrl: "http://gateway.test",
+    runtime,
+    fetchImpl: async (_url, init) => {
+      const payload = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+      captured.push(payload);
+      if (captured.length === 1) {
+        const tools = payload.tools as Array<Record<string, unknown>>;
+        assert.equal(tools.some((item) => asRecord(asRecord(item).function).name === "search_current_ai_thread"), true);
+        return new Response(JSON.stringify({
+          reply: "",
+          tool_calls: [{
+            id: "call_1",
+            name: "search_current_ai_thread",
+            args: { query: "LangChain" },
+            type: "tool_call"
+          }]
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      const messages = payload.messages as Array<Record<string, unknown>>;
+      assert.equal(messages.some((message) =>
+        message.role === "tool" &&
+        message.tool_call_id === "call_1" &&
+        String(message.content).includes("Alice mentioned LangChain tools")
+      ), true);
+      return new Response(JSON.stringify({ reply: "final answer from tool" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  });
+  await app.ready();
+  try {
+    const response = await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "langchain-room",
+      messages: [
+        { sender: "user", content: "Alice mentioned LangChain tools" },
+        { sender: "user", content: "please search LangChain" }
+      ]
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.reply, "final answer from tool");
+    assert.equal(captured.length, 2);
   } finally {
     await app.close();
   }

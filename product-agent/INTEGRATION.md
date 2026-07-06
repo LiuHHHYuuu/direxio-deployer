@@ -10,7 +10,8 @@ The working pieces are:
 
 - `agent-service`: accepts product AI conversation events at `POST /v1/agent/messages`.
 - `ai-gateway`: accepts hosted model requests at `POST /v1/chat`.
-- Contract tests: verify privacy gating, token setup failures, gateway errors, and successful replies.
+- Runtime modes: default local context preparation, plus opt-in LangChain tool-calling with `DIREXIO_AGENT_RUNTIME=langchain`.
+- Contract tests: verify privacy gating, token setup failures, gateway errors, hosted tool-call forwarding, LangChain tool execution, and successful replies.
 
 ## Fit With Current YingSuiAI Repositories
 
@@ -40,7 +41,10 @@ The smallest product path is:
 user sends message to Direxio AI
   -> message-server persists the user message
   -> message-server POSTs an AgentMessageEvent to agent-service
-  -> agent-service calls ai-gateway
+  -> agent-service runs the configured agent runtime
+  -> runtime calls ai-gateway for model decisions
+  -> optional LangChain runtime executes local read-only tools
+  -> runtime calls ai-gateway again for the final answer when tools were used
   -> agent-service returns outbound_message
   -> message-server persists outbound_message as the AI reply
   -> mobile app receives the normal conversation update
@@ -157,9 +161,15 @@ The self-hosted server needs these values when hosted AI is enabled:
 DIREXIO_AI_TOKEN=dxai_xxx
 DIREXIO_AI_GATEWAY_URL=https://ai.direxio.com
 DIREXIO_PRODUCT_AGENT_URL=http://product-agent:8797
+DIREXIO_AGENT_RUNTIME=local
 ```
 
 `DIREXIO_AI_TOKEN` must stay server-side. It must not be sent to the mobile app or written into public logs. `DIREXIO_PRODUCT_AGENT_URL` is also the feature switch: if empty, message-server does not forward agent-room messages.
+
+Set `DIREXIO_AGENT_RUNTIME=langchain` only when the hosted gateway is using an
+OpenAI-compatible provider path that supports `tools` and `tool_calls`. The
+provider key still belongs only on the hosted `ai-gateway`; the self-hosted
+node only receives `DIREXIO_AI_TOKEN`.
 
 The hosted Direxio side runs `ai-gateway` separately from user servers. For the
 MVP it can use an environment-variable allowlist:

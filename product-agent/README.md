@@ -137,9 +137,18 @@ plus explicitly authorized selected context, to the hosted gateway.
 
 ## Local Tools And Thread Memory
 
-`agent-service` now prepares local agent context before it calls `ai-gateway`.
-This is the first step toward a LangChain/LangGraph agent runtime while keeping
-model provider keys on the hosted gateway.
+`agent-service` has two runtime modes:
+
+- `DIREXIO_AGENT_RUNTIME=local` or unset: prepares deterministic local context
+  before it calls `ai-gateway`.
+- `DIREXIO_AGENT_RUNTIME=langchain`: uses LangChain `createAgent` with the same
+  local read-only tools. The model chooses tools from their descriptions, the
+  LangChain loop runs those tools locally, and all model calls still go through
+  `ai-gateway`.
+
+The LangChain mode uses `DirexioGatewayChatModel`, a small adapter that converts
+LangChain messages/tools into the hosted gateway JSON contract. It does not put
+DeepSeek/OpenAI provider keys on the self-hosted node.
 
 Current built-in tools are read-only:
 
@@ -156,6 +165,10 @@ persistent store and user-visible controls.
 
 The tools do not read private human chats by default. Broader message search
 should be added through MCP or message-server APIs with explicit policy checks.
+
+LangChain tool calling requires the hosted `ai-gateway` model provider path to
+support OpenAI-compatible `tools` and `tool_calls`. The deterministic echo
+gateway can still answer normal chat requests, but it will not select tools.
 
 ## Dev Integration Server
 
