@@ -1,4 +1,5 @@
 import { InMemoryThreadMemoryStore, type ThreadMemoryStore } from "../memory/thread-memory.js";
+import type { CurrentThreadMcpClient } from "../mcp/current-thread-mcp-client.js";
 import { callHostedGateway } from "../hosted-gateway-client.js";
 import { createDirexioReadOnlyTools } from "../tools/direxio-tools.js";
 import { memoryAsSystemMessage, runSelectedAgentTools, toolResultsAsSystemMessage } from "../tools/runner.js";
@@ -12,6 +13,7 @@ export interface LocalAgentRuntimeOptions {
   tools?: AgentTool[];
   fetchImpl?: FetchLike;
   env?: NodeJS.ProcessEnv;
+  currentThreadMcpClient?: CurrentThreadMcpClient;
 }
 
 export interface PrepareAgentPayloadOptions {
@@ -30,7 +32,9 @@ export interface LocalAgentRuntime extends AgentRuntime {
 
 export function createLocalAgentRuntime(options: LocalAgentRuntimeOptions = {}): LocalAgentRuntime {
   const memoryStore = options.memoryStore || new InMemoryThreadMemoryStore();
-  const tools = options.tools || createDirexioReadOnlyTools();
+  const tools = options.tools || createDirexioReadOnlyTools({
+    currentThreadMcpClient: options.currentThreadMcpClient
+  });
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   const env = options.env || process.env;
   const gatewayTimeoutMs = numberFromEnv({

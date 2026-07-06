@@ -1,7 +1,13 @@
+import type { CurrentThreadMcpClient } from "../mcp/current-thread-mcp-client.js";
 import type { GatewayMessage } from "../types.js";
+import { createMcpCurrentThreadTool } from "./mcp-current-thread-tool.js";
 import type { AgentTool, AgentToolContext, AgentToolResult } from "./types.js";
 
-export function createDirexioReadOnlyTools(): AgentTool[] {
+export interface DirexioReadOnlyToolsOptions {
+  currentThreadMcpClient?: CurrentThreadMcpClient;
+}
+
+export function createDirexioReadOnlyTools(options: DirexioReadOnlyToolsOptions = {}): AgentTool[] {
   return [
     {
       name: "list_recent_ai_messages",
@@ -47,7 +53,8 @@ export function createDirexioReadOnlyTools(): AgentTool[] {
       name: "web_search",
       description: "Search the public web when web search is explicitly enabled for this node.",
       run: async (input, context) => runWebSearch(input, context)
-    }
+    },
+    createMcpCurrentThreadTool({ client: options.currentThreadMcpClient })
   ];
 }
 

@@ -157,6 +157,7 @@ Current built-in tools are read-only:
 - `get_thread_memory`: reads explicit preferences remembered in this process.
 - `list_contacts`: uses contact data only if message-server includes it.
 - `web_search`: disabled by default; set `DIREXIO_AGENT_WEB_SEARCH=1` to enable the public web search adapter.
+- `mcp_current_thread_search`: disabled by default; searches only the current AI thread through an injected MCP client when `DIREXIO_AGENT_MCP_CURRENT_THREAD=1`.
 
 Thread memory is process-local and scoped by `conversation_id`. It currently
 remembers simple explicit preferences such as concise or detailed reply style.
@@ -165,6 +166,8 @@ persistent store and user-visible controls.
 
 The tools do not read private human chats by default. Broader message search
 should be added through MCP or message-server APIs with explicit policy checks.
+The first MCP hook is only a current-thread client interface and test fake; the
+default runtime does not connect to a real MCP server yet.
 
 LangChain tool calling requires the hosted `ai-gateway` model provider path to
 support OpenAI-compatible `tools` and `tool_calls`. The deterministic echo

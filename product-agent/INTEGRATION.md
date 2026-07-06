@@ -138,6 +138,12 @@ private human chats by default. Any future cross-room or private-message tool
 must enforce explicit authorization outside the prompt, preferably in a
 deterministic policy layer before the tool runs.
 
+The MCP current-thread search hook keeps the same boundary. Its client receives
+only `nodeId`, `conversationId`, `query`, and `limit`, and it is disabled unless
+`DIREXIO_AGENT_MCP_CURRENT_THREAD=1` plus a runtime-injected client are both
+present. It is a skeleton for wiring the existing MCP surface later, not a
+global message reader.
+
 Thread memory is currently process-local and scoped by `conversation_id`. It is
 safe for MVP behavior tests, but production long-term memory should be
 persistent, user-visible, deletable, and opt-out capable.

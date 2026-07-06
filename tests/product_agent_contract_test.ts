@@ -7,6 +7,7 @@ import { createAiGatewayApp, createDefaultModelClient, ModelProviderError } from
 import { createDevIntegrationApp } from "../product-agent/src/bin/dev-integration-server.js";
 import { toAgentMessageEvent } from "../product-agent/src/lib/message-server-adapter.js";
 import { callHostedGateway } from "../product-agent/src/lib/hosted-gateway-client.js";
+import type { CurrentThreadMcpClient, CurrentThreadSearchInput } from "../product-agent/src/lib/mcp/current-thread-mcp-client.js";
 import { createLangChainAgentRuntime } from "../product-agent/src/lib/runtime/langchain-runtime.js";
 
 interface InjectableApp {
@@ -34,6 +35,8 @@ await testAgentMapsGatewayErrors();
 await testAgentForwardsOnlyAllowedContext();
 await testAgentAddsCurrentThreadToolContext();
 await testLangChainRuntimeUsesGatewayToolCalls();
+await testLangChainRuntimeExposesDisabledMcpCurrentThreadTool();
+await testLangChainRuntimeUsesFakeMcpCurrentThreadTool();
 await testLangChainRuntimeStopsAtModelCallLimit();
 await testAgentRemembersThreadPreferences();
 await testAgentWebSearchIsDisabledByDefault();
@@ -443,6 +446,140 @@ async function testLangChainRuntimeUsesGatewayToolCalls(): Promise<void> {
     });
     assert.equal(response.status, 200);
     assert.equal(response.body.reply, "final answer from tool");
+    assert.equal(captured.length, 2);
+  } finally {
+    await app.close();
+  }
+}
+
+async function testLangChainRuntimeExposesDisabledMcpCurrentThreadTool(): Promise<void> {
+  const captured: unknown[] = [];
+  const runtime = createLangChainAgentRuntime({
+    env: {} as NodeJS.ProcessEnv
+  });
+  const app = createAgentServiceApp({
+    aiToken: "dxai_ok",
+    gatewayUrl: "http://gateway.test",
+    runtime,
+    fetchImpl: async (_url, init) => {
+      const payload = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+      captured.push(payload);
+      if (captured.length === 1) {
+        const tools = payload.tools as Array<Record<string, unknown>>;
+        assert.equal(tools.some((item) => asRecord(asRecord(item).function).name === "mcp_current_thread_search"), true);
+        return new Response(JSON.stringify({
+          reply: "",
+          tool_calls: [{
+            id: "call_mcp_disabled",
+            name: "mcp_current_thread_search",
+            args: { query: "MCP", limit: 2 },
+            type: "tool_call"
+          }]
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      const messages = payload.messages as Array<Record<string, unknown>>;
+      assert.equal(messages.some((message) =>
+        message.role === "tool" &&
+        message.tool_call_id === "call_mcp_disabled" &&
+        String(message.content).includes("MCP current-thread search is disabled")
+      ), true);
+      return new Response(JSON.stringify({ reply: "mcp disabled final" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  });
+  await app.ready();
+  try {
+    const response = await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "mcp-disabled-room",
+      messages: [{ sender: "user", content: "please search MCP notes" }]
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.reply, "mcp disabled final");
+    assert.equal(captured.length, 2);
+  } finally {
+    await app.close();
+  }
+}
+
+async function testLangChainRuntimeUsesFakeMcpCurrentThreadTool(): Promise<void> {
+  const captured: unknown[] = [];
+  let mcpInput: CurrentThreadSearchInput | undefined;
+  const currentThreadMcpClient: CurrentThreadMcpClient = {
+    async searchCurrentThread(input) {
+      mcpInput = input;
+      assert.deepEqual(Object.keys(input).sort(), ["conversationId", "limit", "nodeId", "query"]);
+      return {
+        source: "fake-mcp",
+        messages: [{ role: "user", content: "Alice shared MCP notes" }]
+      };
+    }
+  };
+  const runtime = createLangChainAgentRuntime({
+    env: { DIREXIO_AGENT_MCP_CURRENT_THREAD: "1" } as NodeJS.ProcessEnv,
+    currentThreadMcpClient
+  });
+  const app = createAgentServiceApp({
+    aiToken: "dxai_ok",
+    gatewayUrl: "http://gateway.test",
+    runtime,
+    fetchImpl: async (_url, init) => {
+      const payload = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+      captured.push(payload);
+      if (captured.length === 1) {
+        return new Response(JSON.stringify({
+          reply: "",
+          tool_calls: [{
+            id: "call_mcp_1",
+            name: "mcp_current_thread_search",
+            args: { query: "MCP", limit: 3 },
+            type: "tool_call"
+          }]
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      const messages = payload.messages as Array<Record<string, unknown>>;
+      assert.equal(messages.some((message) =>
+        message.role === "tool" &&
+        message.tool_call_id === "call_mcp_1" &&
+        String(message.content).includes("Alice shared MCP notes") &&
+        String(message.content).includes("source: fake-mcp")
+      ), true);
+      return new Response(JSON.stringify({ reply: "final from fake mcp" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  });
+  await app.ready();
+  try {
+    const response = await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "fake-mcp-room",
+      selected_context: "selected text must stay in gateway payload only",
+      context_authorized: true,
+      secret_note: "must not reach mcp client",
+      messages: [{ sender: "user", content: "please search MCP notes" }]
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.reply, "final from fake mcp");
+    assert.deepEqual(mcpInput, {
+      nodeId: "node-1",
+      conversationId: "fake-mcp-room",
+      query: "MCP",
+      limit: 3
+    });
     assert.equal(captured.length, 2);
   } finally {
     await app.close();

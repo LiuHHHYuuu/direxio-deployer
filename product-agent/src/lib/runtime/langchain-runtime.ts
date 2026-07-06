@@ -3,6 +3,7 @@ import type { BaseMessageLike } from "@langchain/core/messages";
 import { createAgent, tool } from "langchain";
 import { z } from "zod";
 import { InMemoryThreadMemoryStore, type ThreadMemorySnapshot, type ThreadMemoryStore } from "../memory/thread-memory.js";
+import type { CurrentThreadMcpClient } from "../mcp/current-thread-mcp-client.js";
 import { DirexioGatewayChatModel, DirexioGatewayChatModelError } from "../models/direxio-gateway-chat-model.js";
 import { createDirexioReadOnlyTools } from "../tools/direxio-tools.js";
 import type { AgentTool, AgentToolContext } from "../tools/types.js";
@@ -18,6 +19,7 @@ export interface LangChainAgentRuntimeOptions {
   checkpointer?: BaseCheckpointSaver;
   maxModelCalls?: number;
   gatewayTimeoutMs?: number;
+  currentThreadMcpClient?: CurrentThreadMcpClient;
 }
 
 export function createLangChainAgentRuntime(options: LangChainAgentRuntimeOptions = {}): AgentRuntime {
@@ -44,7 +46,9 @@ class LangChainAgentRuntime implements AgentRuntime {
   constructor(options: LangChainAgentRuntimeOptions) {
     this.env = options.env || process.env;
     this.memoryStore = options.memoryStore || new InMemoryThreadMemoryStore();
-    this.tools = options.tools || createDirexioReadOnlyTools();
+    this.tools = options.tools || createDirexioReadOnlyTools({
+      currentThreadMcpClient: options.currentThreadMcpClient
+    });
     this.fetchImpl = options.fetchImpl || globalThis.fetch;
     this.checkpointer = options.checkpointer || new MemorySaver();
     this.maxModelCalls = options.maxModelCalls || numberFromEnv({
@@ -212,6 +216,12 @@ function schemaForTool(name: string) {
   if (name === "web_search") {
     return z.object({
       query: z.string().min(1).describe("Public web search query.")
+    });
+  }
+  if (name === "mcp_current_thread_search") {
+    return z.object({
+      query: z.string().min(1).describe("Text to search for in the current Direxio AI thread through MCP."),
+      limit: z.number().int().min(1).max(20).optional().describe("Maximum matching messages to read.")
     });
   }
   return z.object({});
