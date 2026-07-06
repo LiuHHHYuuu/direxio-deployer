@@ -7,6 +7,7 @@ import { DirexioGatewayChatModel, DirexioGatewayChatModelError } from "../models
 import { createDirexioReadOnlyTools } from "../tools/direxio-tools.js";
 import type { AgentTool, AgentToolContext } from "../tools/types.js";
 import type { FetchLike, GatewayMessage } from "../types.js";
+import { flagFromEnv, numberFromEnv } from "./runtime-config.js";
 import type { AgentRuntime, AgentRuntimeRunOptions, AgentRuntimeResult } from "./types.js";
 
 export interface LangChainAgentRuntimeOptions {
@@ -15,10 +16,19 @@ export interface LangChainAgentRuntimeOptions {
   fetchImpl?: FetchLike;
   env?: NodeJS.ProcessEnv;
   checkpointer?: BaseCheckpointSaver;
+  maxModelCalls?: number;
+  gatewayTimeoutMs?: number;
 }
 
 export function createLangChainAgentRuntime(options: LangChainAgentRuntimeOptions = {}): AgentRuntime {
   return new LangChainAgentRuntime(options);
+}
+
+class AgentModelCallLimitError extends Error {
+  constructor(readonly maxModelCalls: number) {
+    super(`agent model call limit reached: ${maxModelCalls}`);
+    this.name = "AgentModelCallLimitError";
+  }
 }
 
 class LangChainAgentRuntime implements AgentRuntime {
@@ -27,16 +37,35 @@ class LangChainAgentRuntime implements AgentRuntime {
   private readonly fetchImpl: FetchLike;
   private readonly env: NodeJS.ProcessEnv;
   private readonly checkpointer: BaseCheckpointSaver;
+  private readonly maxModelCalls: number;
+  private readonly gatewayTimeoutMs: number;
+  private readonly runtimeLogEnabled: boolean;
 
   constructor(options: LangChainAgentRuntimeOptions) {
+    this.env = options.env || process.env;
     this.memoryStore = options.memoryStore || new InMemoryThreadMemoryStore();
     this.tools = options.tools || createDirexioReadOnlyTools();
     this.fetchImpl = options.fetchImpl || globalThis.fetch;
-    this.env = options.env || process.env;
     this.checkpointer = options.checkpointer || new MemorySaver();
+    this.maxModelCalls = options.maxModelCalls || numberFromEnv({
+      env: this.env,
+      key: "DIREXIO_AGENT_MAX_MODEL_CALLS",
+      fallback: 3,
+      min: 1,
+      max: 10
+    });
+    this.gatewayTimeoutMs = options.gatewayTimeoutMs || numberFromEnv({
+      env: this.env,
+      key: "DIREXIO_AGENT_GATEWAY_TIMEOUT_MS",
+      fallback: 30000,
+      min: 1,
+      max: 120000
+    });
+    this.runtimeLogEnabled = flagFromEnv(this.env, "DIREXIO_AGENT_RUNTIME_LOG");
   }
 
   async run(options: AgentRuntimeRunOptions): Promise<AgentRuntimeResult> {
+    let modelCalls = 0;
     this.memoryStore.rememberMessages(options.payload.conversation_id, options.payload.messages);
     const memory = this.memoryStore.snapshot(options.payload.conversation_id);
     const toolContext: AgentToolContext = {
@@ -53,11 +82,27 @@ class LangChainAgentRuntime implements AgentRuntime {
       conversationId: options.payload.conversation_id,
       task: options.payload.task,
       model: options.payload.model,
-      fetchImpl: options.fetchImpl || this.fetchImpl
+      fetchImpl: options.fetchImpl || this.fetchImpl,
+      gatewayTimeoutMs: this.gatewayTimeoutMs,
+      beforeGatewayCall: () => {
+        if (modelCalls >= this.maxModelCalls) {
+          logRuntimeEvent(this.runtimeLogEnabled, {
+            type: "agent_model_call_limit",
+            max_model_calls: this.maxModelCalls
+          });
+          throw new AgentModelCallLimitError(this.maxModelCalls);
+        }
+        modelCalls += 1;
+        logRuntimeEvent(this.runtimeLogEnabled, {
+          type: "agent_model_call",
+          model_call: modelCalls,
+          max_model_calls: this.maxModelCalls
+        });
+      }
     });
     const agent = createAgent({
       model,
-      tools: this.tools.map((agentTool) => createLangChainTool(agentTool, toolContext)),
+      tools: this.tools.map((agentTool) => createLangChainTool(agentTool, toolContext, this.runtimeLogEnabled)),
       checkpointer: this.checkpointer,
       systemPrompt: buildSystemPrompt(memory)
     });
@@ -65,7 +110,10 @@ class LangChainAgentRuntime implements AgentRuntime {
     try {
       const result = await agent.invoke(
         { messages: options.payload.messages.map(toLangChainMessageLike) },
-        { configurable: { thread_id: options.payload.conversation_id } }
+        {
+          configurable: { thread_id: options.payload.conversation_id },
+          recursionLimit: recursionLimitForModelCalls(this.maxModelCalls)
+        }
       );
       const reply = finalAssistantReply(result);
       if (!reply.trim()) {
@@ -81,6 +129,16 @@ class LangChainAgentRuntime implements AgentRuntime {
       this.memoryStore.rememberAssistantReply(options.payload.conversation_id, reply);
       return { ok: true, reply };
     } catch (error) {
+      if (error instanceof AgentModelCallLimitError) {
+        return {
+          ok: false,
+          status: 429,
+          error: {
+            code: "agent_model_call_limit",
+            message: "Direxio AI stopped because the agent used too many model calls."
+          }
+        };
+      }
       if (error instanceof DirexioGatewayChatModelError) {
         return error.failure;
       }
@@ -96,11 +154,29 @@ class LangChainAgentRuntime implements AgentRuntime {
   }
 }
 
-function createLangChainTool(agentTool: AgentTool, context: AgentToolContext) {
+function createLangChainTool(agentTool: AgentTool, context: AgentToolContext, logEnabled: boolean) {
   return tool(
     async (input: unknown) => {
-      const result = await agentTool.run(asRecord(input), context);
-      return result.ok ? result.content : `Tool ${agentTool.name} failed: ${result.content}`;
+      const startedAt = Date.now();
+      try {
+        const result = await agentTool.run(asRecord(input), context);
+        logRuntimeEvent(logEnabled, {
+          type: "agent_tool_call",
+          tool_name: agentTool.name,
+          ok: result.ok,
+          duration_ms: Date.now() - startedAt
+        });
+        return result.ok ? result.content : `Tool ${agentTool.name} failed: ${result.content}`;
+      } catch (error) {
+        logRuntimeEvent(logEnabled, {
+          type: "agent_tool_call",
+          tool_name: agentTool.name,
+          ok: false,
+          duration_ms: Date.now() - startedAt,
+          error_name: error instanceof Error ? error.name : "UnknownError"
+        });
+        throw error;
+      }
     },
     {
       name: agentTool.name,
@@ -108,6 +184,18 @@ function createLangChainTool(agentTool: AgentTool, context: AgentToolContext) {
       schema: schemaForTool(agentTool.name)
     }
   );
+}
+
+function recursionLimitForModelCalls(maxModelCalls: number): number {
+  return Math.max(6, maxModelCalls * 4 + 4);
+}
+
+function logRuntimeEvent(enabled: boolean, event: Record<string, unknown>): void {
+  if (!enabled) return;
+  console.info(JSON.stringify({
+    component: "direxio_product_agent",
+    ...event
+  }));
 }
 
 function schemaForTool(name: string) {

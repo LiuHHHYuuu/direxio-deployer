@@ -162,6 +162,8 @@ DIREXIO_AI_TOKEN=dxai_xxx
 DIREXIO_AI_GATEWAY_URL=https://ai.direxio.com
 DIREXIO_PRODUCT_AGENT_URL=http://product-agent:8797
 DIREXIO_AGENT_RUNTIME=local
+DIREXIO_AGENT_MAX_MODEL_CALLS=3
+DIREXIO_AGENT_GATEWAY_TIMEOUT_MS=30000
 ```
 
 `DIREXIO_AI_TOKEN` must stay server-side. It must not be sent to the mobile app or written into public logs. `DIREXIO_PRODUCT_AGENT_URL` is also the feature switch: if empty, message-server does not forward agent-room messages.
@@ -170,6 +172,13 @@ Set `DIREXIO_AGENT_RUNTIME=langchain` only when the hosted gateway is using an
 OpenAI-compatible provider path that supports `tools` and `tool_calls`. The
 provider key still belongs only on the hosted `ai-gateway`; the self-hosted
 node only receives `DIREXIO_AI_TOKEN`.
+
+`DIREXIO_AGENT_MAX_MODEL_CALLS` limits how many times one LangChain agent turn
+may call the hosted gateway. A tool-using turn normally needs two calls: one
+for the model to choose the tool, and one for the final answer after local tool
+execution. `DIREXIO_AGENT_GATEWAY_TIMEOUT_MS` applies to each gateway call.
+For debugging, `DIREXIO_AGENT_RUNTIME_LOG=1` logs tool names, durations, status,
+and model-call counts without logging message content.
 
 The hosted Direxio side runs `ai-gateway` separately from user servers. For the
 MVP it can use an environment-variable allowlist:

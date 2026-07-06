@@ -21,6 +21,8 @@ export interface DirexioGatewayChatModelFields extends BaseChatModelParams {
   fetchImpl?: FetchLike;
   tools?: BindToolsInput[];
   toolChoice?: "auto" | "none";
+  gatewayTimeoutMs?: number;
+  beforeGatewayCall?: () => void;
 }
 
 export class DirexioGatewayChatModelError extends Error {
@@ -40,6 +42,8 @@ export class DirexioGatewayChatModel extends BaseChatModel<BaseChatModelCallOpti
   private readonly fetchImpl: FetchLike;
   private readonly tools: BindToolsInput[];
   private readonly toolChoice?: "auto" | "none";
+  private readonly gatewayTimeoutMs?: number;
+  private readonly beforeGatewayCall?: () => void;
 
   constructor(fields: DirexioGatewayChatModelFields) {
     super(fields);
@@ -52,6 +56,8 @@ export class DirexioGatewayChatModel extends BaseChatModel<BaseChatModelCallOpti
     this.fetchImpl = fields.fetchImpl || globalThis.fetch;
     this.tools = fields.tools || [];
     this.toolChoice = fields.toolChoice;
+    this.gatewayTimeoutMs = fields.gatewayTimeoutMs;
+    this.beforeGatewayCall = fields.beforeGatewayCall;
   }
 
   _llmType(): string {
@@ -68,11 +74,14 @@ export class DirexioGatewayChatModel extends BaseChatModel<BaseChatModelCallOpti
       model: this.model,
       fetchImpl: this.fetchImpl,
       tools,
-      toolChoice: normalizeToolChoice(kwargs?.tool_choice)
+      toolChoice: normalizeToolChoice(kwargs?.tool_choice),
+      gatewayTimeoutMs: this.gatewayTimeoutMs,
+      beforeGatewayCall: this.beforeGatewayCall
     });
   }
 
   async _generate(messages: BaseMessage[]): Promise<ChatResult> {
+    this.beforeGatewayCall?.();
     const payload: GatewayChatRequest = {
       node_id: this.nodeId,
       conversation_id: this.conversationId,
@@ -85,7 +94,8 @@ export class DirexioGatewayChatModel extends BaseChatModel<BaseChatModelCallOpti
       gatewayUrl: this.gatewayUrl,
       aiToken: this.aiToken,
       payload,
-      fetchImpl: this.fetchImpl
+      fetchImpl: this.fetchImpl,
+      timeoutMs: this.gatewayTimeoutMs
     });
     if (!result.ok) {
       throw new DirexioGatewayChatModelError(result);

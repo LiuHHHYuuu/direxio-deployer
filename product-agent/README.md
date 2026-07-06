@@ -170,6 +170,16 @@ LangChain tool calling requires the hosted `ai-gateway` model provider path to
 support OpenAI-compatible `tools` and `tool_calls`. The deterministic echo
 gateway can still answer normal chat requests, but it will not select tools.
 
+Runtime safety controls:
+
+- `DIREXIO_AGENT_MAX_MODEL_CALLS`: maximum gateway-backed model calls per
+  LangChain agent turn. Defaults to `3`; accepted range is `1` to `10`.
+- `DIREXIO_AGENT_GATEWAY_TIMEOUT_MS`: timeout for each product-agent to
+  `ai-gateway` call. Defaults to `30000`; accepted range is `1` to `120000`.
+- `DIREXIO_AGENT_RUNTIME_LOG=1`: writes lightweight runtime events such as
+  model call count, tool name, duration, and status. It does not log message
+  content.
+
 ## Dev Integration Server
 
 Run a local message-server handoff simulation:

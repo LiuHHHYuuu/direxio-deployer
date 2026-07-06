@@ -21,13 +21,19 @@ export async function callHostedGateway({
   gatewayUrl,
   aiToken,
   payload,
-  fetchImpl = globalThis.fetch
+  fetchImpl = globalThis.fetch,
+  timeoutMs
 }: {
   gatewayUrl: string;
   aiToken: string;
   payload: GatewayChatRequest;
   fetchImpl?: FetchLike;
+  timeoutMs?: number;
 }): Promise<HostedGatewayResult> {
+  const controller = timeoutMs && timeoutMs > 0 ? new AbortController() : undefined;
+  const timeout = controller
+    ? setTimeout(() => controller.abort(), timeoutMs)
+    : undefined;
   try {
     const response = await fetchImpl(`${stripTrailingSlash(gatewayUrl)}/v1/chat`, {
       method: "POST",
@@ -35,6 +41,7 @@ export async function callHostedGateway({
         "Authorization": `Bearer ${aiToken}`,
         "Content-Type": "application/json"
       },
+      ...(controller ? { signal: controller.signal } : {}),
       body: JSON.stringify(payload)
     });
     const body = await safeResponseJson(response);
@@ -58,7 +65,17 @@ export async function callHostedGateway({
       reply: responseBody.reply,
       tool_calls: toolCalls
     };
-  } catch {
+  } catch (error) {
+    if (isAbortError(error)) {
+      return {
+        ok: false,
+        status: 504,
+        error: {
+          code: "gateway_timeout",
+          message: "Direxio AI gateway timed out. Please try again later."
+        }
+      };
+    }
     return {
       ok: false,
       status: 503,
@@ -67,6 +84,8 @@ export async function callHostedGateway({
         message: "Direxio AI is temporarily unavailable. Please try again later."
       }
     };
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
 }
 
@@ -129,6 +148,13 @@ function normalizeToolCalls(value: unknown): GatewayToolCall[] {
       return { id, name, args, type: "tool_call" as const };
     })
     .filter((item): item is GatewayToolCall => Boolean(item));
+}
+
+function isAbortError(error: unknown): boolean {
+  const record = asRecord(error);
+  return error instanceof DOMException && error.name === "AbortError"
+    || record.name === "AbortError"
+    || record.code === "ABORT_ERR";
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

@@ -6,6 +6,7 @@ import { createAgentServiceApp } from "../product-agent/src/lib/agent-service.js
 import { createAiGatewayApp, createDefaultModelClient, ModelProviderError } from "../product-agent/src/lib/ai-gateway.js";
 import { createDevIntegrationApp } from "../product-agent/src/bin/dev-integration-server.js";
 import { toAgentMessageEvent } from "../product-agent/src/lib/message-server-adapter.js";
+import { callHostedGateway } from "../product-agent/src/lib/hosted-gateway-client.js";
 import { createLangChainAgentRuntime } from "../product-agent/src/lib/runtime/langchain-runtime.js";
 
 interface InjectableApp {
@@ -23,6 +24,7 @@ interface InjectableApp {
 await testGatewayAuthAndSuccess();
 await testGatewayExplicitRealModelMode();
 await testGatewayForwardsOpenAIToolDefinitionsAndCalls();
+await testHostedGatewayTimeout();
 await testGatewayHidesProviderDebugByDefault();
 await testGatewayShowsProviderDebugWhenEnabled();
 await testDirexioAiTokenGenerator();
@@ -32,6 +34,7 @@ await testAgentMapsGatewayErrors();
 await testAgentForwardsOnlyAllowedContext();
 await testAgentAddsCurrentThreadToolContext();
 await testLangChainRuntimeUsesGatewayToolCalls();
+await testLangChainRuntimeStopsAtModelCallLimit();
 await testAgentRemembersThreadPreferences();
 await testAgentWebSearchIsDisabledByDefault();
 await testAgentServiceMessageServerEndpointIgnoresNonAiConversation();
@@ -149,6 +152,31 @@ async function testGatewayForwardsOpenAIToolDefinitionsAndCalls(): Promise<void>
   assert.equal(result.tool_calls?.[0]?.id, "call_1");
   assert.equal(result.tool_calls?.[0]?.name, "search_current_ai_thread");
   assert.deepEqual(result.tool_calls?.[0]?.args, { query: "LangChain" });
+}
+
+async function testHostedGatewayTimeout(): Promise<void> {
+  const result = await callHostedGateway({
+    gatewayUrl: "http://gateway.test",
+    aiToken: "dxai_ok",
+    timeoutMs: 1,
+    payload: {
+      node_id: "node-1",
+      conversation_id: "ai-room",
+      task: "chat",
+      model: "default",
+      messages: [{ role: "user", content: "hello" }]
+    },
+    fetchImpl: async (_url, init) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        reject(new DOMException("The operation was aborted.", "AbortError"));
+      }, { once: true });
+    })
+  });
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.status, 504);
+    assert.equal(result.error.code, "gateway_timeout");
+  }
 }
 
 async function testGatewayHidesProviderDebugByDefault(): Promise<void> {
@@ -416,6 +444,51 @@ async function testLangChainRuntimeUsesGatewayToolCalls(): Promise<void> {
     assert.equal(response.status, 200);
     assert.equal(response.body.reply, "final answer from tool");
     assert.equal(captured.length, 2);
+  } finally {
+    await app.close();
+  }
+}
+
+async function testLangChainRuntimeStopsAtModelCallLimit(): Promise<void> {
+  const captured: unknown[] = [];
+  const runtime = createLangChainAgentRuntime({
+    maxModelCalls: 1,
+    env: {} as NodeJS.ProcessEnv
+  });
+  const app = createAgentServiceApp({
+    aiToken: "dxai_ok",
+    gatewayUrl: "http://gateway.test",
+    runtime,
+    fetchImpl: async (_url, init) => {
+      captured.push(JSON.parse(String(init?.body || "{}")));
+      return new Response(JSON.stringify({
+        reply: "",
+        tool_calls: [{
+          id: "call_1",
+          name: "search_current_ai_thread",
+          args: { query: "LangChain" },
+          type: "tool_call"
+        }]
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  });
+  await app.ready();
+  try {
+    const response = await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "limited-langchain-room",
+      messages: [
+        { sender: "user", content: "Alice mentioned LangChain tools" },
+        { sender: "user", content: "please search LangChain" }
+      ]
+    });
+    assert.equal(response.status, 429);
+    assert.equal(errorCode(response.body), "agent_model_call_limit");
+    assert.equal(captured.length, 1);
   } finally {
     await app.close();
   }

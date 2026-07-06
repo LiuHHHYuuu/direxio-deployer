@@ -4,6 +4,7 @@ import { createDirexioReadOnlyTools } from "../tools/direxio-tools.js";
 import { memoryAsSystemMessage, runSelectedAgentTools, toolResultsAsSystemMessage } from "../tools/runner.js";
 import type { AgentTool } from "../tools/types.js";
 import type { FetchLike, GatewayChatRequest } from "../types.js";
+import { numberFromEnv } from "./runtime-config.js";
 import type { AgentRuntime, AgentRuntimeRunOptions } from "./types.js";
 
 export interface LocalAgentRuntimeOptions {
@@ -32,6 +33,13 @@ export function createLocalAgentRuntime(options: LocalAgentRuntimeOptions = {}):
   const tools = options.tools || createDirexioReadOnlyTools();
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   const env = options.env || process.env;
+  const gatewayTimeoutMs = numberFromEnv({
+    env,
+    key: "DIREXIO_AGENT_GATEWAY_TIMEOUT_MS",
+    fallback: 30000,
+    min: 1,
+    max: 120000
+  });
 
   return {
     async run(options: AgentRuntimeRunOptions) {
@@ -43,7 +51,8 @@ export function createLocalAgentRuntime(options: LocalAgentRuntimeOptions = {}):
         gatewayUrl: options.gatewayUrl,
         aiToken: options.aiToken,
         payload: prepared.payload,
-        fetchImpl: options.fetchImpl || fetchImpl
+        fetchImpl: options.fetchImpl || fetchImpl,
+        timeoutMs: gatewayTimeoutMs
       });
       if (gatewayResponse.ok) {
         prepared.rememberAssistantReply(gatewayResponse.reply);
