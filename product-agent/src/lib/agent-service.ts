@@ -1,11 +1,13 @@
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import { toAgentMessageEvent, type MessageServerNewMessageEvent } from "./message-server-adapter.js";
+import { createLocalAgentRuntime, type LocalAgentRuntime } from "./runtime/local-agent-runtime.js";
 import type { FetchLike, GatewayChatRequest, GatewayMessage } from "./types.js";
 
 export interface AgentServiceOptions {
   gatewayUrl?: string;
   aiToken?: string;
   fetchImpl?: FetchLike;
+  runtime?: LocalAgentRuntime;
   logger?: boolean;
 }
 
@@ -29,6 +31,7 @@ export function createAgentServiceApp(options: AgentServiceOptions = {}): Fastif
   const gatewayUrl = stripTrailingSlash(options.gatewayUrl || process.env.DIREXIO_AI_GATEWAY_URL || "http://127.0.0.1:8787");
   const aiToken = options.aiToken ?? process.env.DIREXIO_AI_TOKEN ?? "";
   const fetchImpl = options.fetchImpl || globalThis.fetch;
+  const runtime = options.runtime || createLocalAgentRuntime({ fetchImpl });
 
   const app = Fastify({
     logger: options.logger ?? false,
@@ -60,6 +63,7 @@ export function createAgentServiceApp(options: AgentServiceOptions = {}): Fastif
       aiToken,
       gatewayUrl,
       fetchImpl,
+      runtime,
       reply
     });
   });
@@ -75,6 +79,7 @@ export function createAgentServiceApp(options: AgentServiceOptions = {}): Fastif
       aiToken,
       gatewayUrl,
       fetchImpl,
+      runtime,
       reply
     });
   });
@@ -87,12 +92,14 @@ async function handleAgentMessageEvent({
   aiToken,
   gatewayUrl,
   fetchImpl,
+  runtime,
   reply
 }: {
   event: Record<string, unknown>;
   aiToken: string;
   gatewayUrl: string;
   fetchImpl: FetchLike;
+  runtime: LocalAgentRuntime;
   reply: FastifyReply;
 }) {
     if (event.conversation_type !== "direxio_ai") {
@@ -120,10 +127,12 @@ async function handleAgentMessageEvent({
       });
     }
 
-    const gatewayResponse = await callHostedGateway({ gatewayUrl, aiToken, payload, fetchImpl });
+    const prepared = await runtime.preparePayload({ event, payload });
+    const gatewayResponse = await callHostedGateway({ gatewayUrl, aiToken, payload: prepared.payload, fetchImpl });
     if (!gatewayResponse.ok) {
       return reply.status(gatewayResponse.status).send({ error: gatewayResponse.error });
     }
+    prepared.rememberAssistantReply(gatewayResponse.reply);
 
     return reply.status(200).send({
       reply: gatewayResponse.reply,

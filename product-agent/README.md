@@ -135,6 +135,28 @@ The direct message-server endpoint accepts both the hosted-agent contract value
 `conversation_type: "agent"`. Both paths forward only AI conversation messages,
 plus explicitly authorized selected context, to the hosted gateway.
 
+## Local Tools And Thread Memory
+
+`agent-service` now prepares local agent context before it calls `ai-gateway`.
+This is the first step toward a LangChain/LangGraph agent runtime while keeping
+model provider keys on the hosted gateway.
+
+Current built-in tools are read-only:
+
+- `list_recent_ai_messages`: reads recent messages from the current AI thread.
+- `search_current_ai_thread`: searches the current AI thread only.
+- `get_thread_memory`: reads explicit preferences remembered in this process.
+- `list_contacts`: uses contact data only if message-server includes it.
+- `web_search`: disabled by default; set `DIREXIO_AGENT_WEB_SEARCH=1` to enable the public web search adapter.
+
+Thread memory is process-local and scoped by `conversation_id`. It currently
+remembers simple explicit preferences such as concise or detailed reply style.
+This is not long-term memory yet; production long-term memory should use a
+persistent store and user-visible controls.
+
+The tools do not read private human chats by default. Broader message search
+should be added through MCP or message-server APIs with explicit policy checks.
+
 ## Dev Integration Server
 
 Run a local message-server handoff simulation:

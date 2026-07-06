@@ -28,6 +28,9 @@ await testAgentIgnoresNonAiConversation();
 await testAgentRequiresHostedToken();
 await testAgentMapsGatewayErrors();
 await testAgentForwardsOnlyAllowedContext();
+await testAgentAddsCurrentThreadToolContext();
+await testAgentRemembersThreadPreferences();
+await testAgentWebSearchIsDisabledByDefault();
 await testAgentServiceMessageServerEndpointIgnoresNonAiConversation();
 await testAgentServiceMessageServerEndpointReturnsOutboundMessage();
 await testMessageServerAdapterIgnoresNonAiConversations();
@@ -261,6 +264,107 @@ async function testAgentForwardsOnlyAllowedContext(): Promise<void> {
     const authorizedMessages = asRecord(captured[1]).messages as Array<Record<string, unknown>>;
     assert.equal(authorizedMessages.length, 2);
     assert.match(String(authorizedMessages[0]?.content), /Selected context:\nselected text/);
+  } finally {
+    await app.close();
+  }
+}
+
+async function testAgentAddsCurrentThreadToolContext(): Promise<void> {
+  const captured: unknown[] = [];
+  const app = createAgentServiceApp({
+    aiToken: "dxai_ok",
+    gatewayUrl: "http://gateway.test",
+    fetchImpl: async (_url, init) => {
+      captured.push(JSON.parse(String(init?.body || "{}")));
+      return new Response(JSON.stringify({ reply: "tool-aware reply" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  });
+  await app.ready();
+  try {
+    const response = await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "ai-room",
+      messages: [
+        { sender: "user", content: "Alice mentioned LangChain tools" },
+        { sender: "user", content: "搜索 LangChain" }
+      ]
+    });
+    assert.equal(response.status, 200);
+    const messages = asRecord(captured[0]).messages as Array<Record<string, unknown>>;
+    assert.match(String(messages[0]?.content), /Direxio local tool context/);
+    assert.match(String(messages[0]?.content), /search_current_ai_thread/);
+    assert.match(String(messages[0]?.content), /Alice mentioned LangChain tools/);
+  } finally {
+    await app.close();
+  }
+}
+
+async function testAgentRemembersThreadPreferences(): Promise<void> {
+  const captured: unknown[] = [];
+  const app = createAgentServiceApp({
+    aiToken: "dxai_ok",
+    gatewayUrl: "http://gateway.test",
+    fetchImpl: async (_url, init) => {
+      captured.push(JSON.parse(String(init?.body || "{}")));
+      return new Response(JSON.stringify({ reply: "ok" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  });
+  await app.ready();
+  try {
+    await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "memory-room",
+      messages: [{ sender: "user", content: "记住我喜欢简短回答" }]
+    });
+    const response = await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "memory-room",
+      messages: [{ sender: "user", content: "我喜欢什么回答风格？" }]
+    });
+    assert.equal(response.status, 200);
+    const secondPayload = asRecord(captured[1]);
+    const messages = secondPayload.messages as Array<Record<string, unknown>>;
+    assert.match(String(messages[0]?.content), /Direxio thread memory/);
+    assert.match(String(messages[0]?.content), /response_style: concise/);
+  } finally {
+    await app.close();
+  }
+}
+
+async function testAgentWebSearchIsDisabledByDefault(): Promise<void> {
+  const captured: unknown[] = [];
+  const app = createAgentServiceApp({
+    aiToken: "dxai_ok",
+    gatewayUrl: "http://gateway.test",
+    fetchImpl: async (_url, init) => {
+      captured.push(JSON.parse(String(init?.body || "{}")));
+      return new Response(JSON.stringify({ reply: "web disabled" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  });
+  await app.ready();
+  try {
+    const response = await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "web-room",
+      messages: [{ sender: "user", content: "联网搜索 LangChain 最新信息" }]
+    });
+    assert.equal(response.status, 200);
+    const messages = asRecord(captured[0]).messages as Array<Record<string, unknown>>;
+    assert.match(String(messages[0]?.content), /web_search/);
+    assert.match(String(messages[0]?.content), /Web search is disabled/);
   } finally {
     await app.close();
   }

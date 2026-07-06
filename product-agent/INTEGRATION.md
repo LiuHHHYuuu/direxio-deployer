@@ -127,6 +127,17 @@ If the user explicitly uses an action such as `Ask AI`, `Forward to AI`, or sele
 
 If `context_authorized` is not exactly `true`, `agent-service` ignores `selected_context`.
 
+The first local tools layer follows the same boundary. It can add context from
+the current AI thread, explicit thread preferences, contact data already
+included in the agent event, and optionally public web search. It does not read
+private human chats by default. Any future cross-room or private-message tool
+must enforce explicit authorization outside the prompt, preferably in a
+deterministic policy layer before the tool runs.
+
+Thread memory is currently process-local and scoped by `conversation_id`. It is
+safe for MVP behavior tests, but production long-term memory should be
+persistent, user-visible, deletable, and opt-out capable.
+
 ## Mobile Contract
 
 Mobile should treat `Direxio AI` as a product-managed conversation entry, not as a normal user account that can be invited, blocked, or called.
