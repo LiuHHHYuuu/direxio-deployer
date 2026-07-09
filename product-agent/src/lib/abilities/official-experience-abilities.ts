@@ -18,9 +18,9 @@ export const officialExperienceAbilityManifests: AgentAbilityManifest[] = [
   {
     id: "persona-card",
     action: "persona_card",
-    title: "Digital Persona Card",
-    shortTitle: "Persona",
-    description: "Create a private, compact persona summary from the current AI thread.",
+    title: "数字人格卡",
+    shortTitle: "人格卡",
+    description: "总结最近互动风格。",
     permissions: [
       { scope: "current_ai_thread", access: "read", required: true },
       { scope: "thread_memory", access: "read", required: false }
@@ -31,9 +31,9 @@ export const officialExperienceAbilityManifests: AgentAbilityManifest[] = [
   {
     id: "memory-capsule",
     action: "memory_capsule",
-    title: "Memory Capsule",
-    shortTitle: "Memory",
-    description: "Create a short private recap from the current AI thread.",
+    title: "记忆胶囊",
+    shortTitle: "记忆",
+    description: "整理当前重点。",
     permissions: [
       { scope: "current_ai_thread", access: "read", required: true },
       { scope: "thread_memory", access: "read", required: false }
@@ -44,9 +44,9 @@ export const officialExperienceAbilityManifests: AgentAbilityManifest[] = [
   {
     id: "mood-card",
     action: "mood_card",
-    title: "Mood Card",
-    shortTitle: "Mood",
-    description: "Create a short private mood snapshot from the current AI thread.",
+    title: "今日状态卡",
+    shortTitle: "状态",
+    description: "生成简短状态。",
     permissions: [
       { scope: "current_ai_thread", access: "read", required: true },
       { scope: "thread_memory", access: "read", required: false }
@@ -70,16 +70,17 @@ export function createPersonaCard(input: ExperienceAbilityInput): AgentActionRes
   const themes = detectThemes(text);
   const tone = detectTone(text);
   const preference = firstPreference(input.memory);
+  const memory = memoryHighlights(input.memory);
   return baseResult({
     action: "persona_card",
-    title: "Digital Persona Card",
-    summary: `You are showing ${tone} energy around ${themes[0]}.`,
+    title: "数字人格卡",
+    summary: `${toneLabel(tone)}，关注${themes[0]}。`,
     points: compact([
-      `Main focus: ${themes[0]}`,
-      `Style: ${tone}`,
-      preference ? `Remembered: ${preference}` : "Memory: no explicit preference yet"
+      `重点：${themes[0]}`,
+      `风格：${toneLabel(tone)}`,
+      memory[0] ? `记忆：${memory[0]}` : preference ? `记忆：${preference}` : "记忆：暂无"
     ]),
-    nextActions: ["Generate share version"]
+    nextActions: ["生成分享版"]
   });
 }
 
@@ -87,16 +88,18 @@ export function createMemoryCapsule(input: ExperienceAbilityInput): AgentActionR
   const messages = recentUserMessages(input);
   const text = combinedText(messages);
   const themes = detectThemes(text);
+  const memory = memoryHighlights(input.memory);
   return baseResult({
     action: "memory_capsule",
-    title: "Memory Capsule",
-    summary: input.focus ? `A short recap around ${input.focus}.` : `This thread is mostly about ${themes[0]}.`,
+    title: "记忆胶囊",
+    summary: input.focus ? `围绕${input.focus}整理。` : `主要围绕${themes[0]}。`,
     points: compact([
-      `Theme: ${themes[0]}`,
-      `Signal: ${themes[1] || "focused product thinking"}`,
-      `Scope: ${messages.length} current-thread messages`
+      `主题：${themes[0]}`,
+      `信号：${themes[1] || "产品推进"}`,
+      ...(memory[0] ? [`记忆：${memory[0]}`] : []),
+      `范围：${messages.length} 条`
     ]),
-    nextActions: ["Save private note"]
+    nextActions: ["保存为私密记忆"]
   });
 }
 
@@ -105,16 +108,17 @@ export function createMoodCard(input: ExperienceAbilityInput): AgentActionResult
   const text = combinedText(messages);
   const tone = detectTone(text);
   const signals = moodSignals(text);
+  const memory = memoryHighlights(input.memory);
   return baseResult({
     action: "mood_card",
-    title: "Mood Card",
-    summary: `Current mood reads as ${tone}.`,
+    title: "今日状态卡",
+    summary: `当前状态：${toneLabel(tone)}。`,
     points: compact([
-      signals[0] || "Steady and focused",
-      signals[1] || "Good moment for a small next step",
-      "Private until you choose to share"
+      signals[0] || "稳定推进",
+      signals[1] || "适合做一个小下一步",
+      ...(memory[0] ? [`记忆：${memory[0]}`] : [])
     ]),
-    nextActions: ["Make it calmer"]
+    nextActions: ["换个更轻的版本"]
   });
 }
 
@@ -172,13 +176,13 @@ function combinedText(messages: GatewayMessage[]): string {
 
 function detectThemes(text: string): string[] {
   const themes: string[] = [];
-  addTheme(themes, text, "agent building", ["agent", "langchain", "mcp", "tool", "runtime", "gateway"]);
-  addTheme(themes, text, "privacy boundaries", ["privacy", "private", "permission", "authorized", "consent"]);
-  addTheme(themes, text, "self-hosted deployment", ["deploy", "docker", "server", "ec2", "ghcr"]);
-  addTheme(themes, text, "mobile social experience", ["mobile", "app", "friend", "chat", "message"]);
-  addTheme(themes, text, "web3 identity", ["web3", "wallet", "identity", "ens", "did", "xmtp", "lens"]);
-  addTheme(themes, text, "learning by building", ["learn", "teach", "explain", "syntax", "code", "test"]);
-  return themes.length ? themes.slice(0, 3) : ["product exploration", "implementation momentum", "clear next steps"];
+  addTheme(themes, text, "Agent 搭建", ["agent", "langchain", "mcp", "tool", "runtime", "gateway"]);
+  addTheme(themes, text, "隐私边界", ["privacy", "private", "permission", "authorized", "consent", "隐私", "权限"]);
+  addTheme(themes, text, "自部署", ["deploy", "docker", "server", "ec2", "ghcr", "部署", "服务器"]);
+  addTheme(themes, text, "移动端体验", ["mobile", "app", "friend", "chat", "message", "移动", "聊天"]);
+  addTheme(themes, text, "Web3 身份", ["web3", "wallet", "identity", "ens", "did", "xmtp", "lens"]);
+  addTheme(themes, text, "边做边学", ["learn", "teach", "explain", "syntax", "code", "test", "学习", "讲解"]);
+  return themes.length ? themes.slice(0, 3) : ["产品探索", "持续推进", "下一步"];
 }
 
 function addTheme(themes: string[], text: string, theme: string, needles: string[]): void {
@@ -186,20 +190,39 @@ function addTheme(themes: string[], text: string, theme: string, needles: string
 }
 
 function detectTone(text: string): string {
-  if (containsAny(text, ["privacy", "permission", "safe", "risk"])) return "careful";
-  if (containsAny(text, ["continue", "implement", "build", "ship", "test"])) return "builder";
-  if (containsAny(text, ["how", "why", "explain", "teach", "learn", "?"])) return "curious";
-  if (containsAny(text, ["future", "direction", "web3", "upgrade"])) return "exploratory";
+  if (containsAny(text, ["privacy", "permission", "safe", "risk", "隐私", "权限", "风险"])) return "careful";
+  if (containsAny(text, ["continue", "implement", "build", "ship", "test", "继续", "实现", "测试"])) return "builder";
+  if (containsAny(text, ["how", "why", "explain", "teach", "learn", "?", "如何", "为什么", "讲解", "学习"])) return "curious";
+  if (containsAny(text, ["future", "direction", "web3", "upgrade", "未来", "方向", "升级"])) return "exploratory";
   return "focused";
 }
 
 function moodSignals(text: string): string[] {
   const signals = [];
-  if (containsAny(text, ["continue", "build", "implement", "test"])) signals.push("Execution energy is high");
-  if (containsAny(text, ["how", "explain", "teach", "learn"])) signals.push("Learning mode is active");
-  if (containsAny(text, ["privacy", "safe", "permission"])) signals.push("Trust boundaries matter");
-  if (containsAny(text, ["future", "direction", "upgrade"])) signals.push("Thinking beyond the MVP");
-  return signals.length ? signals : ["Steady product focus"];
+  if (containsAny(text, ["continue", "build", "implement", "test", "继续", "实现", "测试"])) signals.push("执行感强");
+  if (containsAny(text, ["how", "explain", "teach", "learn", "如何", "讲解", "学习"])) signals.push("学习状态在线");
+  if (containsAny(text, ["privacy", "safe", "permission", "隐私", "权限"])) signals.push("在意信任边界");
+  if (containsAny(text, ["future", "direction", "upgrade", "未来", "方向", "升级"])) signals.push("在想 MVP 之后");
+  return signals.length ? signals : ["产品感稳定"];
+}
+
+function memoryHighlights(memory: ThreadMemorySnapshot): string[] {
+  const candidates = [
+    ...(memory.relevantMemories || []).map((item) => item.text),
+    ...Object.entries(memory.preferences).map(([key, value]) => `${key}=${value}`),
+    ...memory.persistentMemories.map((item) => item.text)
+  ];
+  const seen = new Set<string>();
+  return candidates
+    .map((item) => item.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .filter((item) => {
+      const key = item.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 2);
 }
 
 function firstPreference(memory: ThreadMemorySnapshot): string {
@@ -211,9 +234,24 @@ function compact(values: string[]): string[] {
   return values
     .map((value) => value.replace(/\s+/g, " ").trim())
     .filter(Boolean)
-    .map((value) => value.length > 96 ? `${value.slice(0, 93)}...` : value);
+    .map((value) => value.length > 36 ? `${value.slice(0, 33)}...` : value);
 }
 
 function containsAny(text: string, needles: string[]): boolean {
   return needles.some((needle) => text.includes(needle));
+}
+
+function toneLabel(tone: string): string {
+  switch (tone) {
+    case "careful":
+      return "谨慎";
+    case "builder":
+      return "推进中";
+    case "curious":
+      return "好奇";
+    case "exploratory":
+      return "探索中";
+    default:
+      return "专注";
+  }
 }

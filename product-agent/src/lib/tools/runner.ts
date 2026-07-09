@@ -1,5 +1,5 @@
 import type { FetchLike, GatewayChatRequest, GatewayMessage } from "../types.js";
-import type { ThreadMemorySnapshot } from "../memory/thread-memory.js";
+import type { ThreadMemorySnapshot, ThreadMemoryStore } from "../memory/thread-memory.js";
 import { parseAgentActionContent, toolNameForAgentAction } from "../abilities/action-protocol.js";
 import { authorizeToolInvocation } from "./policy.js";
 import type { AgentTool, AgentToolContext, AgentToolInvocation, AgentToolResult } from "./types.js";
@@ -8,18 +8,20 @@ export interface AgentToolRunOptions {
   event: Record<string, unknown>;
   payload: GatewayChatRequest;
   memory: ThreadMemorySnapshot;
+  memoryStore?: ThreadMemoryStore;
   tools: AgentTool[];
   fetchImpl: FetchLike;
   env: NodeJS.ProcessEnv;
 }
 
 export async function runSelectedAgentTools(options: AgentToolRunOptions): Promise<AgentToolResult[]> {
-  const invocations = selectToolInvocations(options.payload);
+  const invocations = selectToolInvocations(options.payload, options.tools);
   const toolsByName = new Map(options.tools.map((tool) => [tool.name, tool]));
   const context: AgentToolContext = {
     event: options.event,
     payload: options.payload,
     memory: options.memory,
+    memoryStore: options.memoryStore,
     fetchImpl: options.fetchImpl,
     env: options.env
   };
@@ -62,19 +64,41 @@ export function toolResultsAsSystemMessage(results: AgentToolResult[]): GatewayM
   };
 }
 
+/**
+ * Function: Converts explicit thread memory into one system message for the model.
+ * Inputs:
+ * - memory: Snapshot containing recent messages plus user-approved persistent memories.
+ * Output:
+ * - A compact system message, or null when there is no explicit memory.
+ * Side effects:
+ * - None; this only formats already-approved local memory.
+ * Errors:
+ * - None.
+ */
 export function memoryAsSystemMessage(memory: ThreadMemorySnapshot): GatewayMessage | null {
+  const relevant = (memory.relevantMemories || [])
+    .map((item) => item.text)
+    .filter(Boolean)
+    .slice(0, 5);
   const preferences = Object.entries(memory.preferences);
-  if (preferences.length === 0) return null;
+  const facts = memory.persistentMemories
+    .filter((item) => item.type !== "preference")
+    .filter((item) => !relevant.includes(item.text))
+    .map((item) => item.text)
+    .slice(-8);
+  if (relevant.length === 0 && preferences.length === 0 && facts.length === 0) return null;
   return {
     role: "system",
     content: [
       "Direxio thread memory:",
-      ...preferences.map(([key, value]) => `- ${key}: ${value}`)
+      ...relevant.map((text) => `- relevant: ${text}`),
+      ...preferences.map(([key, value]) => `- ${key}: ${value}`),
+      ...facts.map((text) => `- ${text}`)
     ].join("\n")
   };
 }
 
-function selectToolInvocations(payload: GatewayChatRequest): AgentToolInvocation[] {
+function selectToolInvocations(payload: GatewayChatRequest, tools: AgentTool[]): AgentToolInvocation[] {
   const latestUser = [...payload.messages].reverse().find((message) => message.role === "user");
   const text = latestUser?.content || "";
   const normalized = text.toLowerCase();
@@ -90,7 +114,7 @@ function selectToolInvocations(payload: GatewayChatRequest): AgentToolInvocation
     return dedupeInvocations(invocations);
   }
 
-  if (containsAny(normalized, ["最近", "recent", "history", "上下文"])) {
+  if (containsAny(normalized, ["最近", "recent", "history", "上下文", "context"])) {
     invocations.push({
       name: "list_recent_ai_messages",
       input: { limit: 8 },
@@ -98,7 +122,7 @@ function selectToolInvocations(payload: GatewayChatRequest): AgentToolInvocation
     });
   }
 
-  if (containsAny(normalized, ["搜索", "search", "find"])) {
+  if (containsAny(normalized, ["搜索", "查找", "search", "find"])) {
     const query = extractSearchQuery(text);
     invocations.push({
       name: "search_current_ai_thread",
@@ -107,7 +131,7 @@ function selectToolInvocations(payload: GatewayChatRequest): AgentToolInvocation
     });
   }
 
-  if (containsAny(normalized, ["联系人", "contacts", "好友"])) {
+  if (containsAny(normalized, ["联系人", "contacts", "好友", "friends"])) {
     invocations.push({
       name: "list_contacts",
       input: {},
@@ -115,15 +139,20 @@ function selectToolInvocations(payload: GatewayChatRequest): AgentToolInvocation
     });
   }
 
-  if (containsAny(normalized, ["我喜欢什么", "偏好", "preference", "remembered"])) {
+  if (containsAny(normalized, ["我喜欢什么", "偏好", "记住", "preference", "remembered"])) {
     invocations.push({
       name: "get_thread_memory",
       input: {},
       reason: "user_asked_for_thread_memory"
     });
+    invocations.push({
+      name: "memory_search",
+      input: { query: text, limit: 5 },
+      reason: "user_asked_for_relevant_memory"
+    });
   }
 
-  if (containsAny(normalized, ["联网", "网页", "web search", "internet", "最新"])) {
+  if (containsAny(normalized, ["联网", "网页", "互联网", "最新", "web search", "internet", "online", "latest"])) {
     invocations.push({
       name: "web_search",
       input: { query: text },
@@ -131,7 +160,7 @@ function selectToolInvocations(payload: GatewayChatRequest): AgentToolInvocation
     });
   }
 
-  if (containsAny(normalized, ["persona card", "digital persona", "profile card", "personality card"])) {
+  if (shouldCreatePersonaCard(normalized)) {
     invocations.push({
       name: "create_persona_card",
       input: { focus: extractExperienceFocus(text), limit: 12 },
@@ -139,7 +168,7 @@ function selectToolInvocations(payload: GatewayChatRequest): AgentToolInvocation
     });
   }
 
-  if (containsAny(normalized, ["memory capsule", "thread recap", "weekly recap", "recap card"])) {
+  if (shouldCreateMemoryCapsule(normalized)) {
     invocations.push({
       name: "create_memory_capsule",
       input: { focus: extractExperienceFocus(text), limit: 12 },
@@ -147,7 +176,7 @@ function selectToolInvocations(payload: GatewayChatRequest): AgentToolInvocation
     });
   }
 
-  if (containsAny(normalized, ["mood card", "status card", "mood snapshot"])) {
+  if (shouldCreateMoodCard(normalized)) {
     invocations.push({
       name: "create_mood_card",
       input: { focus: extractExperienceFocus(text), limit: 12 },
@@ -155,19 +184,71 @@ function selectToolInvocations(payload: GatewayChatRequest): AgentToolInvocation
     });
   }
 
+  invocations.push(...selectPromptSkillInvocations(tools, text, normalized));
+
   return dedupeInvocations(invocations);
+}
+
+function selectPromptSkillInvocations(tools: AgentTool[], text: string, normalized: string): AgentToolInvocation[] {
+  return tools
+    .filter((tool) => tool.manifest.skillKind === "prompt")
+    .filter((tool) => tool.manifest.triggerExamples?.some((example) =>
+      normalized.includes(example.toLowerCase().trim())
+    ))
+    .map((tool) => ({
+      name: tool.name,
+      input: { user_message: text },
+      reason: "user_prompt_skill_trigger"
+    }));
 }
 
 function extractSearchQuery(text: string): string {
   const trimmed = text.trim();
-  const match = trimmed.match(/(?:搜索|search|find)\s*[:：]?\s*(.+)$/i);
+  const match = trimmed.match(/(?:搜索|查找|search|find)\s*[:：]?\s*(.+)$/i);
   return match?.[1]?.trim() || trimmed;
 }
 
 function extractExperienceFocus(text: string): string {
   const trimmed = text.trim();
-  const match = trimmed.match(/(?:persona card|digital persona|profile card|memory capsule|thread recap|weekly recap|recap card|mood card|status card|mood snapshot)\s*[:-]?\s*(.*)$/i);
+  const match = trimmed.match(/(?:数字人格卡|人格卡|互动风格|记忆胶囊|对话总结|复盘卡|今日状态卡|状态卡|persona card|digital persona|profile card|memory capsule|thread recap|weekly recap|recap card|mood card|status card|mood snapshot)\s*[:：-]?\s*(.*)$/i);
   return match?.[1]?.trim() || "";
+}
+
+function shouldCreatePersonaCard(normalized: string): boolean {
+  return containsAny(normalized, [
+    "数字人格卡",
+    "人格卡",
+    "互动风格",
+    "persona card",
+    "digital persona",
+    "profile card",
+    "personality card"
+  ]);
+}
+
+function shouldCreateMemoryCapsule(normalized: string): boolean {
+  return containsAny(normalized, [
+    "记忆胶囊",
+    "对话总结",
+    "总结这段",
+    "复盘卡",
+    "thread recap",
+    "weekly recap",
+    "recap card",
+    "memory capsule"
+  ]);
+}
+
+function shouldCreateMoodCard(normalized: string): boolean {
+  return containsAny(normalized, [
+    "今日状态卡",
+    "状态卡",
+    "今天状态",
+    "当前状态",
+    "mood card",
+    "status card",
+    "mood snapshot"
+  ]);
 }
 
 function formatToolResultContent(content: string): string {

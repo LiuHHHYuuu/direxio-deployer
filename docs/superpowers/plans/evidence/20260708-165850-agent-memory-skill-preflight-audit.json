@@ -1,0 +1,71 @@
+﻿{
+    "schema":  "direxio.agent_memory_prompt_skill_audit.v1",
+    "generated_at_utc":  "2026-07-08T08:59:57.4197024Z",
+    "node_domain":  "codex1.p2pagent.im",
+    "ssh_user":  "ubuntu",
+    "remote_dir":  "/var/direxio-message-server",
+    "report_only":  true,
+    "skip_local_verifier":  false,
+    "skip_remote_readiness":  false,
+    "live_app_prompt_skill_flag":  false,
+    "live_app_memory_flag":  false,
+    "live_app_card_rendering_flag":  false,
+    "live_app_evidence_path":  "",
+    "live_app_evidence_present":  false,
+    "live_app_evidence_checks":  [
+
+                                 ],
+    "audit_finished":  true,
+    "complete":  false,
+    "gate_count":  5,
+    "blocking_gate_count":  4,
+    "gates":  [
+                  {
+                      "Gate":  "Local verifier",
+                      "Status":  "PASS",
+                      "Evidence":  "Local verifier passed product-agent, message-server, and Flutter Agent memory/Prompt Skill checks."
+                  },
+                  {
+                      "Gate":  "Remote readiness",
+                      "Status":  "FAIL",
+                      "Evidence":  "Remote readiness did not pass; deployed stack is not the latest verified build. Exit code: 1."
+                  },
+                  {
+                      "Gate":  "Live App Prompt Skill path",
+                      "Status":  "PENDING",
+                      "Evidence":  "Run the deployed App, create or edit one Prompt Skill, send an Agent chat message that should trigger it, and confirm it flows through agent_config.skills."
+                  },
+                  {
+                      "Gate":  "Live App memory path",
+                      "Status":  "PENDING",
+                      "Evidence":  "Run the deployed App, save one structured Agent card, confirm local Card Collection persistence, and confirm memory sync succeeds through message-server/product-agent."
+                  },
+                  {
+                      "Gate":  "Live App card rendering path",
+                      "Status":  "PENDING",
+                      "Evidence":  "Run the deployed App and confirm the visible Agent reply is a card/capsule, not raw direxio.agent_action_result.v1 JSON."
+                  }
+              ],
+    "blocking_gates":  [
+                           {
+                               "Gate":  "Remote readiness",
+                               "Status":  "FAIL",
+                               "Evidence":  "Remote readiness did not pass; deployed stack is not the latest verified build. Exit code: 1."
+                           },
+                           {
+                               "Gate":  "Live App Prompt Skill path",
+                               "Status":  "PENDING",
+                               "Evidence":  "Run the deployed App, create or edit one Prompt Skill, send an Agent chat message that should trigger it, and confirm it flows through agent_config.skills."
+                           },
+                           {
+                               "Gate":  "Live App memory path",
+                               "Status":  "PENDING",
+                               "Evidence":  "Run the deployed App, save one structured Agent card, confirm local Card Collection persistence, and confirm memory sync succeeds through message-server/product-agent."
+                           },
+                           {
+                               "Gate":  "Live App card rendering path",
+                               "Status":  "PENDING",
+                               "Evidence":  "Run the deployed App and confirm the visible Agent reply is a card/capsule, not raw direxio.agent_action_result.v1 JSON."
+                           }
+                       ]
+}

@@ -4,9 +4,23 @@ import {
   normalizeAgentAction
 } from "./abilities/action-protocol.js";
 import { createAgentActionMenu } from "./abilities/official-experience-abilities.js";
+import { createDefaultThreadMemoryStore } from "./memory/store-factory.js";
+import type {
+  AgentMemoryItemSource,
+  AgentMemoryItemType,
+  ThreadMemoryStore
+} from "./memory/thread-memory.js";
 import { toAgentMessageEvent, type MessageServerNewMessageEvent } from "./message-server-adapter.js";
 import { createAgentRuntime } from "./runtime/index.js";
 import type { AgentRuntime } from "./runtime/types.js";
+import {
+  createDefaultPromptSkillStore,
+  PromptSkillValidationError,
+  type PromptSkillStore
+} from "./skills/prompt-skill-store.js";
+import type { PromptSkillDefinition } from "./skills/prompt-skill.js";
+import { syncPromptSkillsFromConfig } from "./skills/prompt-skill-sync.js";
+import { createAgentToolRegistry } from "./tools/registry.js";
 import type { FetchLike, GatewayChatRequest, GatewayMessage } from "./types.js";
 
 export interface AgentServiceOptions {
@@ -14,14 +28,20 @@ export interface AgentServiceOptions {
   aiToken?: string;
   fetchImpl?: FetchLike;
   runtime?: AgentRuntime;
+  memoryStore?: ThreadMemoryStore;
+  promptSkillStore?: PromptSkillStore;
+  env?: NodeJS.ProcessEnv;
   logger?: boolean;
 }
 
 export function createAgentServiceApp(options: AgentServiceOptions = {}): FastifyInstance {
-  const gatewayUrl = stripTrailingSlash(options.gatewayUrl || process.env.DIREXIO_AI_GATEWAY_URL || "http://127.0.0.1:8787");
-  const aiToken = options.aiToken ?? process.env.DIREXIO_AI_TOKEN ?? "";
+  const env = options.env || process.env;
+  const gatewayUrl = stripTrailingSlash(options.gatewayUrl || env.DIREXIO_AI_GATEWAY_URL || "http://127.0.0.1:8787");
+  const aiToken = options.aiToken ?? env.DIREXIO_AI_TOKEN ?? "";
   const fetchImpl = options.fetchImpl || globalThis.fetch;
-  const runtime = options.runtime || createAgentRuntime({ fetchImpl });
+  const memoryStore = options.memoryStore || createDefaultThreadMemoryStore(env);
+  const promptSkillStore = options.promptSkillStore || createDefaultPromptSkillStore(env);
+  const runtime = options.runtime || createAgentRuntime({ fetchImpl, env, memoryStore, promptSkillStore });
 
   const app = Fastify({
     logger: options.logger ?? false,
@@ -49,6 +69,158 @@ export function createAgentServiceApp(options: AgentServiceOptions = {}): Fastif
     return reply.status(200).send(createAgentActionMenu());
   });
 
+  app.get("/v1/agent/tools", async (_request, reply) => {
+    return reply.status(200).send({
+      schema: "direxio.agent_tools.v1",
+      title: "Direxio AI tools",
+      items: createAgentToolRegistry({ promptSkillStore }).manifests
+    });
+  });
+
+  app.get("/v1/agent/memory", async (request, reply) => {
+    const query = asRecord(request.query);
+    try {
+      const conversationId = requiredString(query.conversation_id, "conversation_id");
+      return reply.status(200).send({
+        schema: "direxio.agent_memory_list.v1",
+        items: memoryStore.listMemories(conversationId)
+      });
+    } catch (error) {
+      return invalidAgentRequest(reply, errorMessage(error));
+    }
+  });
+
+  app.post("/v1/agent/memory", async (request, reply) => {
+    const body = asRecord(request.body);
+    try {
+      const conversationId = requiredString(body.conversation_id, "conversation_id");
+      const text = requiredString(body.text, "text");
+      const item = memoryStore.saveMemory(conversationId, {
+        text,
+        type: optionalMemoryItemType(body.type),
+        tags: stringList(body.tags),
+        source: optionalMemoryItemSource(body.source)
+      });
+      return reply.status(201).send({
+        schema: "direxio.agent_memory_item.v1",
+        item
+      });
+    } catch (error) {
+      return invalidAgentRequest(reply, errorMessage(error));
+    }
+  });
+
+  app.delete("/v1/agent/memory/:id", async (request, reply) => {
+    const params = asRecord(request.params);
+    const query = asRecord(request.query);
+    try {
+      const id = requiredString(params.id, "id");
+      const conversationId = requiredString(query.conversation_id, "conversation_id");
+      return reply.status(200).send({
+        schema: "direxio.agent_memory_delete.v1",
+        id,
+        deleted: memoryStore.deleteMemory(conversationId, id)
+      });
+    } catch (error) {
+      return invalidAgentRequest(reply, errorMessage(error));
+    }
+  });
+
+  app.get("/v1/agent/skills", async (_request, reply) => {
+    return reply.status(200).send({
+      schema: "direxio.prompt_skill_list.v1",
+      items: promptSkillStore.listSkills()
+    });
+  });
+
+  app.post("/v1/agent/skills/validate", async (request, reply) => {
+    const result = promptSkillStore.validateSkill(request.body);
+    return reply.status(200).send({
+      schema: "direxio.prompt_skill_validation.v1",
+      ok: result.ok,
+      errors: result.errors,
+      ...(result.skill ? { skill: result.skill } : {})
+    });
+  });
+
+  app.post("/v1/agent/skills", async (request, reply) => {
+    try {
+      const skill = promptSkillStore.saveSkill(request.body);
+      return reply.status(201).send({
+        schema: "direxio.prompt_skill_item.v1",
+        item: skill
+      });
+    } catch (error) {
+      if (error instanceof PromptSkillValidationError) {
+        return reply.status(400).send({
+          error: {
+            code: "invalid_prompt_skill",
+            message: error.message,
+            errors: error.errors
+          }
+        });
+      }
+      throw error;
+    }
+  });
+
+  app.post("/v1/agent/skills/sync", async (request, reply) => {
+    const result = syncPromptSkillsFromConfig(promptSkillStore, request.body);
+    const body = {
+      schema: "direxio.prompt_skill_sync.v1",
+      saved: result.saved,
+      skipped: result.skipped,
+      errors: result.errors
+    };
+    return reply.status(result.errors.length ? 400 : 200).send(body);
+  });
+
+  app.patch("/v1/agent/skills/:id", async (request, reply) => {
+    const params = asRecord(request.params);
+    try {
+      const id = requiredString(params.id, "id");
+      const existing = promptSkillStore.listSkills().find((skill) => skill.id === id);
+      if (!existing) {
+        return reply.status(404).send({
+          error: {
+            code: "prompt_skill_not_found",
+            message: `Prompt Skill ${id} was not found.`
+          }
+        });
+      }
+      const skill = promptSkillStore.saveSkill(mergePromptSkillPatch(id, existing, request.body));
+      return reply.status(200).send({
+        schema: "direxio.prompt_skill_item.v1",
+        item: skill
+      });
+    } catch (error) {
+      if (error instanceof PromptSkillValidationError) {
+        return reply.status(400).send({
+          error: {
+            code: "invalid_prompt_skill",
+            message: error.message,
+            errors: error.errors
+          }
+        });
+      }
+      return invalidAgentRequest(reply, errorMessage(error));
+    }
+  });
+
+  app.delete("/v1/agent/skills/:id", async (request, reply) => {
+    const params = asRecord(request.params);
+    try {
+      const id = requiredString(params.id, "id");
+      return reply.status(200).send({
+        schema: "direxio.prompt_skill_delete.v1",
+        id,
+        deleted: promptSkillStore.deleteSkill(id)
+      });
+    } catch (error) {
+      return invalidAgentRequest(reply, errorMessage(error));
+    }
+  });
+
   app.post("/v1/agent/messages", async (request, reply) => {
     const event = asRecord(request.body);
 
@@ -57,6 +229,7 @@ export function createAgentServiceApp(options: AgentServiceOptions = {}): Fastif
       aiToken,
       gatewayUrl,
       fetchImpl,
+      promptSkillStore,
       runtime,
       reply
     });
@@ -73,6 +246,7 @@ export function createAgentServiceApp(options: AgentServiceOptions = {}): Fastif
       aiToken,
       gatewayUrl,
       fetchImpl,
+      promptSkillStore,
       runtime,
       reply
     });
@@ -86,6 +260,7 @@ async function handleAgentMessageEvent({
   aiToken,
   gatewayUrl,
   fetchImpl,
+  promptSkillStore,
   runtime,
   reply
 }: {
@@ -93,6 +268,7 @@ async function handleAgentMessageEvent({
   aiToken: string;
   gatewayUrl: string;
   fetchImpl: FetchLike;
+  promptSkillStore: PromptSkillStore;
   runtime: AgentRuntime;
   reply: FastifyReply;
 }) {
@@ -111,6 +287,7 @@ async function handleAgentMessageEvent({
 
   let payload: GatewayChatRequest;
   try {
+    syncPromptSkillsFromConfig(promptSkillStore, event);
     payload = buildGatewayChatPayload(event);
   } catch (error) {
     return reply.status(400).send({
@@ -130,7 +307,9 @@ async function handleAgentMessageEvent({
     reply: gatewayResponse.reply,
     outbound_message: {
       conversation_id: payload.conversation_id,
-      content: gatewayResponse.reply
+      content: "outboundContent" in gatewayResponse
+        ? gatewayResponse.outboundContent
+        : gatewayResponse.reply
     }
   });
 }
@@ -194,8 +373,69 @@ function requiredString(value: unknown, name: string): string {
   return value.trim();
 }
 
+function optionalMemoryItemType(value: unknown): AgentMemoryItemType | undefined {
+  return value === "preference" ||
+    value === "fact" ||
+    value === "card_memory" ||
+    value === "skill_result" ||
+    value === "thread_summary"
+    ? value
+    : undefined;
+}
+
+function optionalMemoryItemSource(value: unknown): AgentMemoryItemSource | undefined {
+  return value === "user_explicit" ||
+    value === "agent_card_save" ||
+    value === "prompt_skill" ||
+    value === "migration" ||
+    value === "auto_compression"
+    ? value
+    : undefined;
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean)
+    : [];
+}
+
 function stringOrDefault(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+/**
+ * Function: Builds a full Prompt Skill save body from an existing skill and a PATCH request.
+ * Inputs:
+ * - id: Route id that owns the update and prevents accidental id changes.
+ * - existing: Current persisted Prompt Skill.
+ * - patch: Partial update body from the HTTP request, accepting camelCase or snake_case fields.
+ * Output:
+ * - Full Prompt Skill-shaped object ready for the normal store validator.
+ * Side effects:
+ * - None; persistence still happens through `promptSkillStore.saveSkill`.
+ * Errors:
+ * - None here; invalid merged values are rejected by the existing validator.
+ */
+function mergePromptSkillPatch(
+  id: string,
+  existing: PromptSkillDefinition,
+  patch: unknown
+): Record<string, unknown> {
+  const record = asRecord(patch);
+  const merged: Record<string, unknown> = {
+    ...existing,
+    ...record,
+    id,
+    schema: existing.schema,
+    createdAt: existing.createdAt
+  };
+  if (Object.hasOwn(record, "trigger_examples")) {
+    merged.triggerExamples = record.trigger_examples;
+  }
+  if (Object.hasOwn(record, "output_kind")) {
+    merged.outputKind = record.output_kind;
+  }
+  return merged;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -209,6 +449,15 @@ function errorMessage(error: unknown): string {
 function errorStatusCode(error: unknown): number {
   const record = asRecord(error);
   return typeof record.statusCode === "number" ? record.statusCode : 500;
+}
+
+function invalidAgentRequest(reply: FastifyReply, message: string) {
+  return reply.status(400).send({
+    error: {
+      code: "invalid_agent_request",
+      message
+    }
+  });
 }
 
 function stripTrailingSlash(value: string): string {

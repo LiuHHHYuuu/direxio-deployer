@@ -7,6 +7,8 @@
     "build": "tsc -p tsconfig.build.json",
     "check": "tsc --noEmit",
     "test": "tsx ../tests/product_agent_contract_test.ts",
+    "smoke:memory-skill": "tsx src/bin/smoke-memory-skill.ts",
+    "smoke:container": "tsx src/bin/container-smoke.ts",
     "token:generate": "node scripts/generate-token.mjs",
     "start:agent-service": "node dist/bin/agent-service.js",
     "start:ai-gateway": "node dist/bin/ai-gateway.js",

@@ -11,6 +11,7 @@ volumes:
   postgres-data:
   message-config:
   message-data:
+  product-agent-data:
   caddy-data:
   caddy-config:
 
@@ -97,10 +98,21 @@ services:
     environment:
       DIREXIO_AGENT_SERVICE_HOST: 0.0.0.0
       DIREXIO_AGENT_SERVICE_PORT: 8797
+      DIREXIO_AGENT_DATA_DIR: /var/lib/direxio-product-agent
+      DIREXIO_AGENT_RUNTIME: ${DIREXIO_AGENT_RUNTIME:-langchain}
+      DIREXIO_AGENT_WEB_SEARCH: ${DIREXIO_AGENT_WEB_SEARCH:-1}
+      DIREXIO_AGENT_AUTO_COMPACT_MEMORY: ${DIREXIO_AGENT_AUTO_COMPACT_MEMORY:-1}
+      DIREXIO_AGENT_CONTEXT_WINDOW_MESSAGES: ${DIREXIO_AGENT_CONTEXT_WINDOW_MESSAGES:-30}
+      DIREXIO_AGENT_COMPRESSION_CHUNK_MESSAGES: ${DIREXIO_AGENT_COMPRESSION_CHUNK_MESSAGES:-12}
+      DIREXIO_AGENT_EMBEDDING_BASE_URL: ${DIREXIO_AGENT_EMBEDDING_BASE_URL:-}
+      DIREXIO_AGENT_EMBEDDING_MODEL: ${DIREXIO_AGENT_EMBEDDING_MODEL:-}
+      DIREXIO_AGENT_EMBEDDING_API_KEY: ${DIREXIO_AGENT_EMBEDDING_API_KEY:-}
       DIREXIO_AI_GATEWAY_URL: ${DIREXIO_AI_GATEWAY_URL:-https://ai.direxio.com}
       DIREXIO_AI_TOKEN: ${DIREXIO_AI_TOKEN:-}
     expose:
       - "8797"
+    volumes:
+      - product-agent-data:/var/lib/direxio-product-agent
     restart: unless-stopped
 
   caddy:

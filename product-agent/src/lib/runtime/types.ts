@@ -9,7 +9,11 @@ export interface AgentRuntimeRunOptions {
   fetchImpl: FetchLike;
 }
 
-export type AgentRuntimeResult = HostedGatewayResult;
+export type AgentRuntimeResult = HostedGatewayResult | {
+  ok: true;
+  reply: string;
+  outboundContent: string;
+};
 
 export interface AgentRuntime {
   run(options: AgentRuntimeRunOptions): Promise<AgentRuntimeResult>;

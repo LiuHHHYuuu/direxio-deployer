@@ -39,6 +39,15 @@ export interface AgentMessageEvent {
 
   /** Explicit consent bit for selected_context. It must never default to true. */
   context_authorized?: boolean;
+
+  /** Optional official Agent plugin config snapshot supplied by message-server. */
+  agent_config?: unknown;
+
+  /** Optional direct Prompt Skill list supplied by a narrow bridge. */
+  prompt_skills?: unknown;
+
+  /** Optional direct skill list. Non-Prompt Skill entries are ignored. */
+  skills?: unknown;
 }
 
 /**

@@ -29,6 +29,11 @@ export interface MessageServerNewMessageEvent {
   model?: string;
   selected_context?: string;
   context_authorized?: boolean;
+  agent_config?: unknown;
+  plugin_config?: unknown;
+  config?: unknown;
+  prompt_skills?: unknown;
+  skills?: unknown;
 }
 
 export interface AdapterIgnored {
@@ -73,7 +78,10 @@ export function toAgentMessageEvent(event: MessageServerNewMessageEvent): Adapte
     task: event.task,
     model: event.model,
     selected_context: event.selected_context,
-    context_authorized: event.context_authorized
+    context_authorized: event.context_authorized,
+    agent_config: event.agent_config || event.plugin_config || event.config,
+    prompt_skills: event.prompt_skills,
+    skills: event.skills
   };
 }
 

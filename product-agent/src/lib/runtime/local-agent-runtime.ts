@@ -1,8 +1,19 @@
-import { InMemoryThreadMemoryStore, type ThreadMemoryStore } from "../memory/thread-memory.js";
+import {
+  InMemoryThreadMemoryStore,
+  latestUserMessageContent,
+  withRelevantMemories,
+  type ThreadMemoryStore
+} from "../memory/thread-memory.js";
 import type { CurrentThreadMcpClient } from "../mcp/current-thread-mcp-client.js";
+import type { PromptSkillStore } from "../skills/prompt-skill-store.js";
 import { callHostedGateway } from "../hosted-gateway-client.js";
-import { createDirexioReadOnlyTools } from "../tools/direxio-tools.js";
+import { createAgentToolRegistry } from "../tools/registry.js";
 import { memoryAsSystemMessage, runSelectedAgentTools, toolResultsAsSystemMessage } from "../tools/runner.js";
+import {
+  agentActionResultContentFromText,
+  agentActionResultContentFromToolResults,
+  agentActionResultSummaryFromText
+} from "../tools/structured-output.js";
 import type { AgentTool } from "../tools/types.js";
 import type { FetchLike, GatewayChatRequest } from "../types.js";
 import { numberFromEnv } from "./runtime-config.js";
@@ -14,6 +25,7 @@ export interface LocalAgentRuntimeOptions {
   fetchImpl?: FetchLike;
   env?: NodeJS.ProcessEnv;
   currentThreadMcpClient?: CurrentThreadMcpClient;
+  promptSkillStore?: PromptSkillStore;
 }
 
 export interface PrepareAgentPayloadOptions {
@@ -23,6 +35,7 @@ export interface PrepareAgentPayloadOptions {
 
 export interface PreparedAgentPayload {
   payload: GatewayChatRequest;
+  outboundContent?: string;
   rememberAssistantReply(reply: string): void;
 }
 
@@ -32,9 +45,6 @@ export interface LocalAgentRuntime extends AgentRuntime {
 
 export function createLocalAgentRuntime(options: LocalAgentRuntimeOptions = {}): LocalAgentRuntime {
   const memoryStore = options.memoryStore || new InMemoryThreadMemoryStore();
-  const tools = options.tools || createDirexioReadOnlyTools({
-    currentThreadMcpClient: options.currentThreadMcpClient
-  });
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   const env = options.env || process.env;
   const gatewayTimeoutMs = numberFromEnv({
@@ -59,21 +69,54 @@ export function createLocalAgentRuntime(options: LocalAgentRuntimeOptions = {}):
         timeoutMs: gatewayTimeoutMs
       });
       if (gatewayResponse.ok) {
-        prepared.rememberAssistantReply(gatewayResponse.reply);
+        const finalStructuredContent = agentActionResultContentFromText(gatewayResponse.reply);
+        const outboundContent = finalStructuredContent || prepared.outboundContent;
+        const structuredSummary = outboundContent
+          ? agentActionResultSummaryFromText(outboundContent)
+          : "";
+        const reply = finalStructuredContent
+          ? structuredSummary || "Agent card"
+          : gatewayResponse.reply || structuredSummary;
+        prepared.rememberAssistantReply(reply);
+        if (outboundContent) {
+          return {
+            ...gatewayResponse,
+            reply,
+            outboundContent
+          };
+        }
+        return {
+          ...gatewayResponse,
+          reply
+        };
       }
       return gatewayResponse;
     },
     async preparePayload({ event, payload }) {
       memoryStore.rememberMessages(payload.conversation_id, payload.messages);
-      const memory = memoryStore.snapshot(payload.conversation_id);
+      const snapshot = memoryStore.snapshot(payload.conversation_id);
+      const relevantMemories = await memoryStore.searchMemories(payload.conversation_id, {
+        query: latestUserMessageContent(payload.messages),
+        limit: 5,
+        fetchImpl,
+        env,
+        event
+      });
+      const memory = withRelevantMemories(snapshot, relevantMemories);
+      const tools = options.tools || createAgentToolRegistry({
+        currentThreadMcpClient: options.currentThreadMcpClient,
+        promptSkillStore: options.promptSkillStore
+      }).tools;
       const toolResults = await runSelectedAgentTools({
         event,
         payload,
         memory,
+        memoryStore,
         tools,
         fetchImpl,
         env
       });
+      const outboundContent = agentActionResultContentFromToolResults(toolResults);
 
       const contextMessages = [
         memoryAsSystemMessage(memory),
@@ -85,6 +128,7 @@ export function createLocalAgentRuntime(options: LocalAgentRuntimeOptions = {}):
           ...payload,
           messages: [...contextMessages, ...payload.messages]
         },
+        ...(outboundContent ? { outboundContent } : {}),
         rememberAssistantReply(reply: string) {
           memoryStore.rememberAssistantReply(payload.conversation_id, reply);
         }

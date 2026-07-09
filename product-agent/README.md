@@ -38,6 +38,50 @@ cd product-agent
 npm run check
 ```
 
+Run the local memory plus Prompt Skill smoke:
+
+```bash
+cd product-agent
+npm run smoke:memory-skill
+```
+
+This starts `agent-service` on an ephemeral localhost port, writes explicit
+memory and an uploaded Prompt Skill into a temporary `DIREXIO_AGENT_DATA_DIR`,
+restarts the service, verifies both records persisted, then triggers the Prompt
+Skill through the message-server handoff endpoint. The local smoke reuses the
+same TypeScript runner that the deployed-node smoke calls, so API contract drift
+is caught before deployment.
+
+Run the Docker image smoke:
+
+```bash
+cd product-agent
+npm run smoke:container
+```
+
+This builds a local product-agent image, starts a temporary fake AI gateway and
+product-agent container, writes memory, syncs a Prompt Skill, restarts the
+container, verifies persisted state, then removes the temporary Docker
+resources. Set `DIREXIO_PRODUCT_AGENT_SMOKE_SKIP_BUILD=1` to reuse an existing
+local image.
+
+Run the deployed-node smoke after starting the `product-agent` compose profile:
+
+```bash
+scp -i <key.pem> product-agent/scripts/remote-smoke.sh ubuntu@<public-ip>:/tmp/product-agent-remote-smoke.sh
+ssh -i <key.pem> ubuntu@<public-ip> 'cd /var/direxio-message-server && bash /tmp/product-agent-remote-smoke.sh'
+```
+
+The remote smoke runs inside the product-agent container. It writes memory,
+syncs one Prompt Skill, restarts only `product-agent` by default, verifies both
+records still exist, then sends one `/v1/message-server/new-message` event
+through the configured AI gateway. It requires a working server-side
+`DIREXIO_AI_TOKEN` and a product-agent image built from a version that contains
+`dist/bin/remote-smoke-runner.js`. Use `DIREXIO_PRODUCT_AGENT_SMOKE_RESTART=0`
+only when you need to skip the restart check. Older deployments may keep the
+compose project in `/opt/p2p`; run the smoke from the directory that contains
+the active `docker-compose.yml`.
+
 Build the production JavaScript output:
 
 ```bash
@@ -139,24 +183,29 @@ plus explicitly authorized selected context, to the hosted gateway.
 
 `agent-service` has two runtime modes:
 
-- `DIREXIO_AGENT_RUNTIME=local` or unset: prepares deterministic local context
-  before it calls `ai-gateway`.
-- `DIREXIO_AGENT_RUNTIME=langchain`: uses LangChain `createAgent` with the same
+- `DIREXIO_AGENT_RUNTIME=langchain` or unset: the intended product path. It uses
+  LangChain `createAgent` with the same
   local read-only tools. The model chooses tools from their descriptions, the
   LangChain loop runs those tools locally, and all model calls still go through
   `ai-gateway`.
+- `DIREXIO_AGENT_RUNTIME=local`: prepares deterministic local context before it
+  calls `ai-gateway`; keep this for tests and cheap smoke checks.
 
 The LangChain mode uses `DirexioGatewayChatModel`, a small adapter that converts
 LangChain messages/tools into the hosted gateway JSON contract. It does not put
 DeepSeek/OpenAI provider keys on the self-hosted node.
 
-Current built-in tools are read-only:
+Current built-in tools are scoped to the current AI thread:
 
 - `list_recent_ai_messages`: reads recent messages from the current AI thread.
 - `search_current_ai_thread`: searches the current AI thread only.
-- `get_thread_memory`: reads explicit preferences remembered in this process.
+- `get_thread_memory`: reads explicit preferences remembered in the current AI thread.
+- `memory_search`: searches relevant long-term memories for the current AI thread.
+- `memory_list`: lists explicit memories for the current AI thread.
+- `memory_save`: saves one explicit memory for the current AI thread.
+- `memory_delete`: deletes one explicit memory from the current AI thread by id.
 - `list_contacts`: uses contact data only if message-server includes it.
-- `web_search`: disabled by default; set `DIREXIO_AGENT_WEB_SEARCH=1` to enable the public web search adapter.
+- `web_search`: enabled by default for current public lookups; set `DIREXIO_AGENT_WEB_SEARCH=0` to disable the public web search adapter.
 - `create_persona_card`: creates a private Digital Persona Card from the current AI thread.
 - `create_memory_capsule`: creates a private recap card from the current AI thread.
 - `create_mood_card`: creates a private mood snapshot card from the current AI thread.
@@ -178,7 +227,9 @@ GET /v1/agent/actions
 ```
 
 The endpoint returns `direxio.agent_action_menu.v1`. When the user taps a
-button, message-server can forward a structured action in the AI room event:
+button, message-server can forward a structured action in the AI room event.
+Product-agent treats that action as a built-in skill/tool invocation instead of
+as a separate hard-coded card path:
 
 ```json
 {
@@ -193,10 +244,153 @@ Supported actions are `persona_card`, `memory_capsule`, and `mood_card`.
 Tools return `direxio.agent_action_result.v1` with one summary, up to three
 points, and one or two next actions so the chat reply stays short.
 
-Thread memory is process-local and scoped by `conversation_id`. It currently
-remembers simple explicit preferences such as concise or detailed reply style.
-This is not long-term memory yet; production long-term memory should use a
-persistent store and user-visible controls.
+Thread memory has two layers:
+
+- Recent messages are process-local and scoped by `conversation_id`.
+- Explicit user memories can persist when `DIREXIO_AGENT_DATA_DIR` is set.
+- When auto compaction is enabled, older recent messages are compressed into a
+  persistent `thread_summary` memory after the thread exceeds the configured
+  context window.
+
+Persistent memory is stored at:
+
+```text
+$DIREXIO_AGENT_DATA_DIR/memory/items.json
+```
+
+When the agent prepares a reply, it searches relevant persistent memories and
+injects the best matches into the model context. If embedding settings are
+available, product-agent writes a local vector index at:
+
+```text
+$DIREXIO_AGENT_DATA_DIR/memory/vectors.json
+```
+
+Embedding is optional. Without it, product-agent falls back to a local hash
+vector so memory search still works without extra infrastructure. To use an
+OpenAI-compatible embedding endpoint, set:
+
+```env
+DIREXIO_AGENT_EMBEDDING_BASE_URL=https://api.example.com/v1
+DIREXIO_AGENT_EMBEDDING_MODEL=text-embedding-3-small
+DIREXIO_AGENT_EMBEDDING_API_KEY=...
+```
+
+The first persistent version only writes explicit memory commands such as
+`remember concise replies in English` or `remember that my project codename is
+Memory Lab`, direct memory API calls, `memory_save` tool calls, card saves, or
+context-window compaction summaries. It does not auto-read or auto-save human
+chats outside the Agent thread.
+
+Auto compaction is controlled by:
+
+```env
+DIREXIO_AGENT_AUTO_COMPACT_MEMORY=1
+DIREXIO_AGENT_CONTEXT_WINDOW_MESSAGES=30
+DIREXIO_AGENT_COMPRESSION_CHUNK_MESSAGES=12
+```
+
+When `recentMessages` grows past `DIREXIO_AGENT_CONTEXT_WINDOW_MESSAGES`,
+product-agent summarizes the oldest
+`DIREXIO_AGENT_COMPRESSION_CHUNK_MESSAGES` messages into a `thread_summary`
+memory with source `auto_compression`, trims those old messages from short-term
+context, and lets vector memory retrieval recall the summary later. Set
+`DIREXIO_AGENT_AUTO_COMPACT_MEMORY=0` to keep the old trim-only behavior.
+
+Local/service memory endpoints:
+
+```http
+GET /v1/agent/memory?conversation_id=<conversation_id>
+POST /v1/agent/memory
+DELETE /v1/agent/memory/<memory_id>?conversation_id=<conversation_id>
+```
+
+The POST body is:
+
+```json
+{
+  "conversation_id": "ai-room",
+  "text": "User prefers short readable cards",
+  "type": "fact",
+  "tags": ["cards"]
+}
+```
+
+Prompt Skills are user-uploaded prompt-only abilities. They are data, not code,
+and are stored at:
+
+```text
+$DIREXIO_AGENT_DATA_DIR/skills/prompt-skills.json
+```
+
+Local/service Prompt Skill endpoints:
+
+```http
+GET /v1/agent/skills
+POST /v1/agent/skills/validate
+POST /v1/agent/skills
+POST /v1/agent/skills/sync
+PATCH /v1/agent/skills/<skill_id>
+DELETE /v1/agent/skills/<skill_id>
+```
+
+The POST body is:
+
+```json
+{
+  "title": "Daily Check In",
+  "description": "Create a short daily reflection from the current AI thread.",
+  "prompt": "Write a concise daily check-in with one summary and one next action.",
+  "triggerExamples": ["daily check in", "make my daily reflection"],
+  "outputKind": "text",
+  "permissions": [
+    { "scope": "current_ai_thread", "access": "read", "required": false }
+  ],
+  "enabled": true
+}
+```
+
+The current implementation validates, stores, lists, deletes, registers, and
+triggers enabled Prompt Skills. Each enabled skill appears in `GET
+/v1/agent/tools` as a `skillKind: "prompt"` tool. When the user's latest message
+matches a `triggerExamples` phrase, product-agent injects the skill prompt as
+local tool context for the model. Prompt Skills still do not execute arbitrary
+code.
+
+`PATCH /v1/agent/skills/<skill_id>` accepts the same fields as a partial
+update. The route id is preserved, and the merged skill must still pass the
+normal Prompt Skill validator before it is saved.
+
+`POST /v1/agent/skills/sync` accepts the same Prompt Skill entries either as a
+direct `skills` array or inside an official Agent plugin config shape such as:
+
+```json
+{
+  "agent_config": {
+    "skills": [
+      {
+        "schema": "direxio.prompt_skill.v1",
+        "kind": "prompt",
+        "id": "prompt-daily-check-in",
+        "title": "Daily Check In",
+        "description": "Create a short daily reflection.",
+        "prompt": "Return one summary and one next action.",
+        "trigger_examples": ["daily check in"],
+        "output_kind": "text",
+        "permissions": [
+          { "scope": "current_ai_thread", "access": "read", "required": false }
+        ],
+        "enabled": true
+      }
+    ]
+  }
+}
+```
+
+The same config shape may be included on `/v1/message-server/new-message` as
+`agent_config`. Product-agent upserts valid Prompt Skills before running the
+turn, so a freshly uploaded Prompt Skill can trigger without a separate manual
+upload call. Non-prompt developer skill entries are skipped.
 
 The tools do not read private human chats by default. Broader message search
 should be added through MCP or message-server APIs with explicit policy checks.
@@ -209,6 +403,17 @@ gateway can still answer normal chat requests, but it will not select tools.
 
 Runtime safety controls:
 
+- `DIREXIO_AGENT_DATA_DIR`: enables file-backed explicit memory. Leave unset for
+  process-local memory only.
+- `DIREXIO_AGENT_AUTO_COMPACT_MEMORY`: enables context-window compaction into
+  `thread_summary` memories. Defaults to `1`.
+- `DIREXIO_AGENT_CONTEXT_WINDOW_MESSAGES`: recent-message window before
+  compaction. Defaults to `30`.
+- `DIREXIO_AGENT_COMPRESSION_CHUNK_MESSAGES`: number of oldest messages to
+  compress when the window is exceeded. Defaults to `12`.
+- `DIREXIO_AGENT_EMBEDDING_BASE_URL`, `DIREXIO_AGENT_EMBEDDING_MODEL`, and
+  `DIREXIO_AGENT_EMBEDDING_API_KEY`: optional OpenAI-compatible embeddings for
+  long-term memory retrieval. If unset or failing, local hash vectors are used.
 - `DIREXIO_AGENT_MAX_MODEL_CALLS`: maximum gateway-backed model calls per
   LangChain agent turn. Defaults to `3`; accepted range is `1` to `10`.
 - `DIREXIO_AGENT_GATEWAY_TIMEOUT_MS`: timeout for each product-agent to
@@ -235,7 +440,9 @@ POST /dev/message-server/new-message
 Content-Type: application/json
 ```
 
-This endpoint passes the event through the same `POST /v1/message-server/new-message` path that future message-server wiring should call.
+This endpoint passes the event through the same
+`POST /v1/message-server/new-message` path used by the message-server
+product-agent bridge.
 
 ## Hosted AI Gateway MVP
 
@@ -259,6 +466,9 @@ Self-hosted node runtime environment:
 DIREXIO_AI_GATEWAY_URL=https://ai.direxio.com
 DIREXIO_AI_TOKEN=dxai_xxx
 DIREXIO_PRODUCT_AGENT_URL=http://product-agent:8797
+DIREXIO_AGENT_DATA_DIR=/var/lib/direxio-product-agent
+DIREXIO_AGENT_RUNTIME=langchain
+DIREXIO_AGENT_WEB_SEARCH=1
 ```
 
 `DIREXIO_AI_TOKEN` is not a DeepSeek/OpenAI key. It is a Direxio gateway token

@@ -172,6 +172,8 @@ cd /opt/p2p
 sudo sh -lc 'cat >> .env <<EOF
 DIREXIO_PRODUCT_AGENT_URL=http://product-agent:8797
 DIREXIO_PRODUCT_AGENT_IMAGE=direxio/product-agent:latest
+DIREXIO_AGENT_RUNTIME=langchain
+DIREXIO_AGENT_WEB_SEARCH=1
 DIREXIO_AI_GATEWAY_URL=https://ai.direxio.com
 DIREXIO_AI_TOKEN=dxai_xxx
 EOF
@@ -179,6 +181,29 @@ COMPOSE_PROFILES=product-agent docker compose --env-file .env up -d message-serv
 ```
 
 `DIREXIO_PRODUCT_AGENT_URL` is the message-server switch. When it is empty, the AI friend stays offline and no chat content is sent to product-agent. When it points at `product-agent`, messages in the built-in Direxio AI room are forwarded server-side and replies are written back as `@agent:<domain>`.
+
+For the single product-agent path, keep `DIREXIO_AGENT_RUNTIME=langchain` and stop any local `direxio-connect` daemon that is still listening to the same `agent_room_id`.
+
+The compose profile mounts `product-agent-data` at `/var/lib/direxio-product-agent` and sets `DIREXIO_AGENT_DATA_DIR` automatically. Product-agent explicit memory and uploaded Prompt Skills persist there across container restarts.
+
+After the profile starts, run the product-agent remote smoke from this repo to
+prove the deployed node can save memory, sync a Prompt Skill, survive a
+product-agent restart, and complete one real model-backed turn. The deployed
+product-agent image must include `dist/bin/remote-smoke-runner.js`, so rebuild
+and publish the image before running this against a new feature branch. Before
+publishing, run `npm run smoke:container` in `product-agent` to prove the image
+itself can persist memory and Prompt Skills across a container restart:
+
+```bash
+scp -i <key.pem> product-agent/scripts/remote-smoke.sh ubuntu@<public-ip>:/tmp/product-agent-remote-smoke.sh
+ssh -i <key.pem> ubuntu@<public-ip> 'cd /var/direxio-message-server && bash /tmp/product-agent-remote-smoke.sh'
+```
+
+Set `DIREXIO_PRODUCT_AGENT_SMOKE_RESTART=0` on the remote command only when you
+want to skip the restart part of the persistence check. The script uses
+the compose directory's `.env` when it exists and falls back to the compose
+environment when it does not. Older deployments may use `/opt/p2p`; run it from
+the directory that contains the active `docker-compose.yml`.
 
 Reset application data while preserving EC2, DNS, fixed IP, and Caddy TLS:
 

@@ -10,7 +10,7 @@ The working pieces are:
 
 - `agent-service`: accepts product AI conversation events at `POST /v1/agent/messages`.
 - `ai-gateway`: accepts hosted model requests at `POST /v1/chat`.
-- Runtime modes: default local context preparation, plus opt-in LangChain tool-calling with `DIREXIO_AGENT_RUNTIME=langchain`.
+- Runtime modes: production deployments use LangChain tool-calling by default; `DIREXIO_AGENT_RUNTIME=local` remains available for deterministic tests and smoke checks.
 - Contract tests: verify privacy gating, token setup failures, gateway errors, hosted tool-call forwarding, LangChain tool execution, and successful replies.
 
 ## Fit With Current YingSuiAI Repositories
@@ -100,6 +100,44 @@ For the direct message-server endpoint, the native shape may use the current pro
 
 `product-agent` normalizes this to `conversation_type: "direxio_ai"` before calling `ai-gateway`.
 
+If message-server has the official Agent plugin config available, it may include
+Prompt Skills in the same request. This is the bridge from Flutter's existing
+plugin `skills` config to product-agent's runnable Prompt Skill store:
+
+```json
+{
+  "conversation_type": "agent",
+  "room_id": "!agents:example.com",
+  "node_id": "example.com",
+  "sender_kind": "user",
+  "content": "daily check in",
+  "agent_config": {
+    "skills": [
+      {
+        "schema": "direxio.prompt_skill.v1",
+        "kind": "prompt",
+        "id": "prompt-daily-check-in",
+        "title": "Daily Check In",
+        "description": "Create a short daily reflection.",
+        "prompt": "Return one summary and one next action.",
+        "trigger_examples": ["daily check in"],
+        "output_kind": "text",
+        "permissions": [
+          { "scope": "current_ai_thread", "access": "read", "required": false }
+        ],
+        "enabled": true
+      }
+    ]
+  }
+}
+```
+
+Product-agent upserts valid Prompt Skills from `agent_config.skills` before the
+turn runs. The same sync behavior is available through
+`POST /v1/agent/skills/sync`, which message-server can call after an Agent
+plugin config update if it does not want to include config on every chat turn.
+Non-prompt developer skill entries are ignored by this sync path.
+
 Expected success response:
 
 ```json
@@ -154,9 +192,10 @@ render a function button by reading `GET /v1/agent/actions`, then forwarding:
 }
 ```
 
-The action result should stay compact: one title, one summary, up to three
-points, and one short next action. Long explanations should be opt-in, not the
-default action-button response.
+The action is handled through the same runtime/tool path as other Agent skills;
+there is no separate direct-card shortcut. The result should stay compact: one
+title, one summary, up to three points, and one short next action. Long
+explanations should be opt-in, not the default action-button response.
 
 The MCP current-thread search hook keeps the same boundary. Its client receives
 only `nodeId`, `conversationId`, `query`, and `limit`, and it is disabled unless
@@ -164,9 +203,20 @@ only `nodeId`, `conversationId`, `query`, and `limit`, and it is disabled unless
 present. It is a skeleton for wiring the existing MCP surface later, not a
 global message reader.
 
-Thread memory is currently process-local and scoped by `conversation_id`. It is
-safe for MVP behavior tests, but production long-term memory should be
-persistent, user-visible, deletable, and opt-out capable.
+Thread memory has two layers:
+
+- Recent message context is process-local and scoped by `conversation_id`.
+- Explicit user memory can persist when `DIREXIO_AGENT_DATA_DIR` is configured,
+  and is exposed through the memory HTTP endpoints and memory tools.
+- When recent Agent-thread context exceeds `DIREXIO_AGENT_CONTEXT_WINDOW_MESSAGES`,
+  product-agent can compress the oldest messages into a persistent
+  `thread_summary` memory with source `auto_compression`.
+- Persistent memories are searched before each reply. Product-agent stores a
+  local vector index in `$DIREXIO_AGENT_DATA_DIR/memory/vectors.json` and uses
+  optional OpenAI-compatible embedding settings when available.
+
+Production privacy still needs a user-visible management surface and opt-out
+controls before expanding beyond explicit thread memory.
 
 ## Mobile Contract
 
@@ -187,17 +237,24 @@ The self-hosted server needs these values when hosted AI is enabled:
 DIREXIO_AI_TOKEN=dxai_xxx
 DIREXIO_AI_GATEWAY_URL=https://ai.direxio.com
 DIREXIO_PRODUCT_AGENT_URL=http://product-agent:8797
-DIREXIO_AGENT_RUNTIME=local
+DIREXIO_AGENT_RUNTIME=langchain
+DIREXIO_AGENT_WEB_SEARCH=1
 DIREXIO_AGENT_MAX_MODEL_CALLS=3
 DIREXIO_AGENT_GATEWAY_TIMEOUT_MS=30000
+DIREXIO_AGENT_AUTO_COMPACT_MEMORY=1
+DIREXIO_AGENT_CONTEXT_WINDOW_MESSAGES=30
+DIREXIO_AGENT_COMPRESSION_CHUNK_MESSAGES=12
+DIREXIO_AGENT_EMBEDDING_BASE_URL=
+DIREXIO_AGENT_EMBEDDING_MODEL=
+DIREXIO_AGENT_EMBEDDING_API_KEY=
 ```
 
 `DIREXIO_AI_TOKEN` must stay server-side. It must not be sent to the mobile app or written into public logs. `DIREXIO_PRODUCT_AGENT_URL` is also the feature switch: if empty, message-server does not forward agent-room messages.
 
-Set `DIREXIO_AGENT_RUNTIME=langchain` only when the hosted gateway is using an
-OpenAI-compatible provider path that supports `tools` and `tool_calls`. The
-provider key still belongs only on the hosted `ai-gateway`; the self-hosted
-node only receives `DIREXIO_AI_TOKEN`.
+`DIREXIO_AGENT_RUNTIME=langchain` or unset is the intended product path. The hosted
+gateway must use an OpenAI-compatible provider path that supports `tools` and
+`tool_calls`. The provider key still belongs only on the hosted `ai-gateway`;
+the self-hosted node only receives `DIREXIO_AI_TOKEN`.
 
 `DIREXIO_AGENT_MAX_MODEL_CALLS` limits how many times one LangChain agent turn
 may call the hosted gateway. A tool-using turn normally needs two calls: one

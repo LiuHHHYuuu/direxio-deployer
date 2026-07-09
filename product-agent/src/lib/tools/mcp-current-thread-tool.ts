@@ -13,6 +13,29 @@ export function createMcpCurrentThreadTool(options: McpCurrentThreadToolOptions 
       "Search the current Direxio AI thread through MCP only when MCP is configured.",
       "Do not search other conversations or private human chats."
     ].join(" "),
+    manifest: {
+      schema: "direxio.agent_tool.v1",
+      name: "mcp_current_thread_search",
+      title: "MCP 搜索",
+      description: "通过 MCP 搜索当前 AI 对话；默认关闭。",
+      category: "thread",
+      source: "mcp",
+      skillKind: "mcp",
+      defaultEnabled: false,
+      permissions: [{ scope: "current_ai_thread", access: "read", required: true }],
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          query: { type: "string" },
+          limit: { type: "number", minimum: 1, maximum: 20 }
+        },
+        required: ["query"]
+      },
+      outputKind: "text",
+      triggerExamples: ["搜索当前对话", "查找 MCP notes"],
+      shareable: false
+    },
     run: async (input, context) => runMcpCurrentThreadSearch(input, context, options.client)
   };
 }
@@ -25,9 +48,7 @@ async function runMcpCurrentThreadSearch(
   const query = stringInput(input.query);
   if (!query) return ok("No MCP search query was provided.");
   if (context.env.DIREXIO_AGENT_MCP_CURRENT_THREAD !== "1" || !client) {
-    return ok(
-      "MCP current-thread search is disabled for this node. Set DIREXIO_AGENT_MCP_CURRENT_THREAD=1 and provide a CurrentThreadMcpClient to enable it."
-    );
+    return ok("MCP 当前对话搜索暂未开启。");
   }
 
   try {

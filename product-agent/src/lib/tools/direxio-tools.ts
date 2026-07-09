@@ -2,7 +2,7 @@ import type { CurrentThreadMcpClient } from "../mcp/current-thread-mcp-client.js
 import type { GatewayMessage } from "../types.js";
 import { createAgentExperienceTools } from "./agent-experience-tools.js";
 import { createMcpCurrentThreadTool } from "./mcp-current-thread-tool.js";
-import type { AgentTool, AgentToolContext, AgentToolResult } from "./types.js";
+import type { AgentTool, AgentToolContext, AgentToolManifest, AgentToolResult } from "./types.js";
 
 export interface DirexioReadOnlyToolsOptions {
   currentThreadMcpClient?: CurrentThreadMcpClient;
@@ -13,11 +13,25 @@ export function createDirexioReadOnlyTools(options: DirexioReadOnlyToolsOptions 
     {
       name: "list_recent_ai_messages",
       description: "Read recent messages from the current Direxio AI thread only.",
+      manifest: manifest({
+        name: "list_recent_ai_messages",
+        title: "最近对话",
+        description: "读取当前 AI 对话里的最近消息。",
+        category: "thread",
+        permissions: [{ scope: "current_ai_thread", access: "read", required: true }]
+      }),
       run: async (input, context) => ok("list_recent_ai_messages", formatMessages(recentMessages(context, numberInput(input.limit, 5))))
     },
     {
       name: "search_current_ai_thread",
       description: "Search messages from the current Direxio AI thread only.",
+      manifest: manifest({
+        name: "search_current_ai_thread",
+        title: "搜索当前对话",
+        description: "只搜索当前 AI 对话，不读取其他聊天。",
+        category: "thread",
+        permissions: [{ scope: "current_ai_thread", access: "read", required: true }]
+      }),
       run: async (input, context) => {
         const query = stringInput(input.query).toLowerCase();
         if (!query) return ok("search_current_ai_thread", "No query was provided.");
@@ -29,6 +43,13 @@ export function createDirexioReadOnlyTools(options: DirexioReadOnlyToolsOptions 
     {
       name: "get_thread_memory",
       description: "Read explicit preferences remembered in the current Direxio AI thread.",
+      manifest: manifest({
+        name: "get_thread_memory",
+        title: "读取记忆",
+        description: "读取当前 AI 对话里明确记住的偏好。",
+        category: "memory",
+        permissions: [{ scope: "thread_memory", access: "read", required: true }]
+      }),
       run: async (_input, context) => {
         const entries = Object.entries(context.memory.preferences);
         return ok(
@@ -42,6 +63,13 @@ export function createDirexioReadOnlyTools(options: DirexioReadOnlyToolsOptions 
     {
       name: "list_contacts",
       description: "Read contacts only when message-server includes contact data in the agent event.",
+      manifest: manifest({
+        name: "list_contacts",
+        title: "联系人",
+        description: "仅在服务端明确传入联系人数据时读取。",
+        category: "contacts",
+        permissions: [{ scope: "contacts", access: "read", required: true }]
+      }),
       run: async (_input, context) => {
         const contacts = Array.isArray(context.event.contacts) ? context.event.contacts : [];
         return ok(
@@ -52,7 +80,15 @@ export function createDirexioReadOnlyTools(options: DirexioReadOnlyToolsOptions 
     },
     {
       name: "web_search",
-      description: "Search the public web when web search is explicitly enabled for this node.",
+      description: "Search the public web for current, external information when it helps answer the user.",
+      manifest: manifest({
+        name: "web_search",
+        title: "联网搜索",
+        description: "联网搜索公开网页；默认关闭，需要节点开启。",
+        category: "web",
+        permissions: [{ scope: "public_web", access: "read", required: true }],
+        defaultEnabled: true
+      }),
       run: async (input, context) => runWebSearch(input, context)
     },
     ...createAgentExperienceTools(),
@@ -67,8 +103,8 @@ function recentMessages(context: AgentToolContext, limit: number): GatewayMessag
 async function runWebSearch(input: Record<string, unknown>, context: AgentToolContext): Promise<AgentToolResult> {
   const query = stringInput(input.query);
   if (!query) return ok("web_search", "No web search query was provided.");
-  if (context.env.DIREXIO_AGENT_WEB_SEARCH !== "1") {
-    return ok("web_search", "Web search is disabled for this node. Set DIREXIO_AGENT_WEB_SEARCH=1 to enable it.");
+  if (!webSearchEnabled(context.env)) {
+    return ok("web_search", "联网搜索暂未开启。");
   }
 
   const endpoint = context.env.DIREXIO_WEB_SEARCH_URL || "https://api.duckduckgo.com/";
@@ -112,6 +148,11 @@ function formatWebSearchBody(body: Record<string, unknown>): string {
   return parts.length ? parts.join("\n") : "No useful web search result was returned.";
 }
 
+function webSearchEnabled(env: NodeJS.ProcessEnv): boolean {
+  const value = env.DIREXIO_AGENT_WEB_SEARCH?.trim().toLowerCase();
+  return value !== "0" && value !== "false" && value !== "off";
+}
+
 function formatMessages(messages: GatewayMessage[]): string {
   if (messages.length === 0) return "No messages available.";
   return messages.map((message) => `${message.role}: ${message.content}`).join("\n");
@@ -137,4 +178,21 @@ function stringInput(value: unknown): string {
 
 function ok(name: string, content: string): AgentToolResult {
   return { name, ok: true, content };
+}
+
+function manifest(input: Omit<AgentToolManifest, "schema" | "outputKind" | "defaultEnabled"> & {
+  defaultEnabled?: boolean;
+  outputKind?: AgentToolManifest["outputKind"];
+}): AgentToolManifest {
+  return {
+    schema: "direxio.agent_tool.v1",
+    ...input,
+    source: input.source || "official",
+    skillKind: input.skillKind || "built_in",
+    inputSchema: input.inputSchema || { type: "object", additionalProperties: true },
+    outputKind: input.outputKind || "text",
+    defaultEnabled: input.defaultEnabled ?? true,
+    triggerExamples: input.triggerExamples || [],
+    shareable: input.shareable ?? false
+  };
 }

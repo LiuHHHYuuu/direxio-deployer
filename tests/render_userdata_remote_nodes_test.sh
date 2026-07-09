@@ -36,6 +36,9 @@ grep -q '/_matrix/client/v3/rooms/${room_path}/join' "$tmp/bundle/init-tokens.sh
 grep -q 'profiles: \["product-agent"\]' "$tmp/bundle/docker-compose.yml"
 grep -q 'DIREXIO_PRODUCT_AGENT_IMAGE:-direxio/product-agent:latest' "$tmp/bundle/docker-compose.yml"
 grep -q 'DIREXIO_AI_TOKEN: ${DIREXIO_AI_TOKEN:-}' "$tmp/bundle/docker-compose.yml"
+grep -q 'product-agent-data:' "$tmp/bundle/docker-compose.yml"
+grep -q 'DIREXIO_AGENT_DATA_DIR: /var/lib/direxio-product-agent' "$tmp/bundle/docker-compose.yml"
+grep -q 'product-agent-data:/var/lib/direxio-product-agent' "$tmp/bundle/docker-compose.yml"
 
 if grep -q '^      DIREXIO_AI_TOKEN=' "$tmp/user-data.yaml"; then
   echo "rendered user-data must not write hosted AI tokens into /opt/p2p/.env by default" >&2
