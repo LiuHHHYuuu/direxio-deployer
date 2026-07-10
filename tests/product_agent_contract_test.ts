@@ -108,12 +108,13 @@ function testAutomaticMemoryCandidateParserAndPolicy(): void {
       "scope":"owner",
       "confidence":0.96,
       "importance":0.8,
-      "sensitivity":"low",
+      "sensitivity":"normal",
       "evidence":"I live in Shanghai",
       "reason":"Useful for local answers"
     }]}
   \`\`\``);
   assert.equal(candidates.length, 1);
+  assert.equal(candidates[0]?.sensitivity, "low");
   const accepted = evaluateMemoryCandidate(candidates[0] as MemoryCandidate, {
     latestUserMessage: "I live in Shanghai",
     explicitRequest: false

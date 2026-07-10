@@ -65,6 +65,7 @@ const MEMORY_EXTRACTION_PROMPT = [
   "Return JSON only: {\"candidates\":[...]}. Return an empty candidates array when nothing is worth remembering.",
   "Each candidate must contain operation, key, text, type, scope, confidence, importance, sensitivity, evidence, and reason.",
   "Allowed operations: create, update, delete, noop. Allowed types: fact, preference. Allowed scopes: owner, conversation.",
+  "Allowed sensitivity values: low, sensitive, secret. Use low for ordinary non-sensitive information.",
   "Use stable dotted keys such as profile.location.city, preference.response.length, goal.current, or project.<name>.goal.",
   "Use owner scope for durable user facts/preferences/goals; conversation scope only for thread-specific facts.",
   "Evidence must be an exact short quote from the latest user message.",

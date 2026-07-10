@@ -92,7 +92,9 @@ function memoryOperation(value: unknown): MemoryCandidateOperation | null {
 }
 
 function memorySensitivity(value: unknown): AgentMemorySensitivity | null {
-  return value === "low" || value === "sensitive" || value === "secret" ? value : null;
+  if (value === "low" || value === "sensitive" || value === "secret") return value;
+  if (value === "normal" || value === "non-sensitive" || value === "nonsensitive") return "low";
+  return null;
 }
 
 function boundedScore(value: unknown): number {
