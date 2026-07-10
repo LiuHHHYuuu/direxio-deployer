@@ -205,7 +205,7 @@ Current built-in tools are scoped to the current AI thread:
 - `memory_save`: saves one explicit memory for the current AI thread.
 - `memory_delete`: deletes one explicit memory from the current AI thread by id.
 - `list_contacts`: uses contact data only if message-server includes it.
-- `web_search`: enabled by default for current public lookups; set `DIREXIO_AGENT_WEB_SEARCH=0` to disable the public web search adapter.
+- `web_search`: calls the authenticated Direxio hosted-search endpoint for current public information; set `DIREXIO_AGENT_WEB_SEARCH=0` to disable it.
 - `create_persona_card`: creates a private Digital Persona Card from the current AI thread.
 - `create_memory_capsule`: creates a private recap card from the current AI thread.
 - `create_mood_card`: creates a private mood snapshot card from the current AI thread.
@@ -490,6 +490,8 @@ DIREXIO_AI_GATEWAY_MODEL_MODE=openai-compatible
 DIREXIO_MODEL_BASE_URL=https://api.deepseek.com/v1
 DIREXIO_MODEL_API_KEY=<provider-api-key>
 DIREXIO_MODEL_NAME=deepseek-chat
+TAVILY_API_KEY=<tavily-api-key>
+DIREXIO_SEARCH_REQUESTS_PER_MINUTE=60
 ```
 
 Self-hosted node runtime environment:
@@ -501,11 +503,26 @@ DIREXIO_PRODUCT_AGENT_URL=http://product-agent:8797
 DIREXIO_AGENT_DATA_DIR=/var/lib/direxio-product-agent
 DIREXIO_AGENT_RUNTIME=langchain
 DIREXIO_AGENT_WEB_SEARCH=1
+DIREXIO_AGENT_TASK_CONTROL=1
+DIREXIO_AGENT_DYNAMIC_CARDS=1
+DIREXIO_AGENT_PROACTIVE_CARDS=1
+DIREXIO_AGENT_CARD_COOLDOWN_MINUTES=360
 ```
 
 `DIREXIO_AI_TOKEN` is not a DeepSeek/OpenAI key. It is a Direxio gateway token
 issued by the hosted gateway operator. The real provider API key must stay only
-on the hosted gateway host.
+on the hosted gateway host. `TAVILY_API_KEY` follows the same rule: it is never
+copied to a self-hosted node. Task control classifies evidence requirements,
+executes required search before answer generation, and rejects promise-only
+answers while preserving one final App message.
+
+Official cards use a built-in Adaptive Card Skill. A local planner decides
+whether a card is valuable, selects `mood_card`, `memory_capsule`, or
+`persona_card`, and enforces proactive-card cooldown. Only then does the skill
+ask the hosted model to write card content from redacted current-thread context
+and approved memory. TypeScript validates the result and falls back to the
+existing deterministic card template on any malformed or unavailable model
+response. The App continues to receive only `direxio.agent_action_result.v1`.
 
 The example compose file for the hosted side lives at
 `deploy/ai-gateway.compose.example.yml`.

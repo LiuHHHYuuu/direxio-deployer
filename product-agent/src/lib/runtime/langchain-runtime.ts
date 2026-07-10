@@ -7,6 +7,7 @@ import {
   parseAgentActionContent,
   toolNameForAgentAction
 } from "../abilities/action-protocol.js";
+import type { AgentActionName } from "../abilities/types.js";
 import { runAutomaticMemory } from "../memory/automatic-memory.js";
 import {
   GatewayMemoryCandidateExtractor,
@@ -22,6 +23,10 @@ import {
 import type { CurrentThreadMcpClient } from "../mcp/current-thread-mcp-client.js";
 import { DirexioGatewayChatModel, DirexioGatewayChatModelError } from "../models/direxio-gateway-chat-model.js";
 import type { PromptSkillStore } from "../skills/prompt-skill-store.js";
+import {
+  GatewayCardGenerationSkill,
+  type CardGenerationSkill
+} from "../skills/card-generation-skill.js";
 import { createAgentToolRegistry } from "../tools/registry.js";
 import {
   agentActionResultContentFromText,
@@ -30,6 +35,17 @@ import {
 import type { AgentTool, AgentToolContext } from "../tools/types.js";
 import type { FetchLike, GatewayMessage } from "../types.js";
 import { flagFromEnv, numberFromEnv } from "./runtime-config.js";
+import { planCardDecision, ProactiveCardGate, type CardDecision } from "./card-planner.js";
+import {
+  completionRetryInstruction,
+  clarificationReply,
+  EvidenceLedger,
+  externalEvidenceFailureReply,
+  findToolForCapabilities,
+  planTask,
+  validateCompletion,
+  type TaskPlan
+} from "./task-control.js";
 import type { AgentRuntime, AgentRuntimeRunOptions, AgentRuntimeResult } from "./types.js";
 
 export interface LangChainAgentRuntimeOptions {
@@ -44,6 +60,7 @@ export interface LangChainAgentRuntimeOptions {
   promptSkillStore?: PromptSkillStore;
   memoryExtractor?: MemoryCandidateExtractor;
   autoMemoryEnabled?: boolean;
+  cardSkill?: CardGenerationSkill;
 }
 
 export function createLangChainAgentRuntime(options: LangChainAgentRuntimeOptions = {}): AgentRuntime {
@@ -80,6 +97,10 @@ class LangChainAgentRuntime implements AgentRuntime {
   private readonly autoMemoryMaxCandidates: number;
   private readonly autoMemoryMinConfidence: number;
   private readonly autoMemoryMinImportance: number;
+  private readonly cardSkill: CardGenerationSkill;
+  private readonly dynamicCardsEnabled: boolean;
+  private readonly proactiveCardsEnabled: boolean;
+  private readonly proactiveCardGate: ProactiveCardGate;
 
   constructor(options: LangChainAgentRuntimeOptions) {
     this.env = options.env || process.env;
@@ -122,6 +143,16 @@ class LangChainAgentRuntime implements AgentRuntime {
     });
     this.autoMemoryMinConfidence = scoreFromEnv(this.env, "DIREXIO_AGENT_AUTO_MEMORY_MIN_CONFIDENCE", 0.8);
     this.autoMemoryMinImportance = scoreFromEnv(this.env, "DIREXIO_AGENT_AUTO_MEMORY_MIN_IMPORTANCE", 0.55);
+    this.cardSkill = options.cardSkill || new GatewayCardGenerationSkill();
+    this.dynamicCardsEnabled = enabledByDefault(this.env, "DIREXIO_AGENT_DYNAMIC_CARDS");
+    this.proactiveCardsEnabled = enabledByDefault(this.env, "DIREXIO_AGENT_PROACTIVE_CARDS");
+    this.proactiveCardGate = new ProactiveCardGate(numberFromEnv({
+      env: this.env,
+      key: "DIREXIO_AGENT_CARD_COOLDOWN_MINUTES",
+      fallback: 360,
+      min: 1,
+      max: 10080
+    }) * 60000);
   }
 
   async run(options: AgentRuntimeRunOptions): Promise<AgentRuntimeResult> {
@@ -145,18 +176,109 @@ class LangChainAgentRuntime implements AgentRuntime {
       memory,
       memoryStore: this.memoryStore,
       fetchImpl: effectiveFetch,
-      env: this.env
+      env: this.env,
+      gatewayUrl: options.gatewayUrl,
+      aiToken: options.aiToken
     };
-    const directCard = await runDirectExperienceCardTool({
-      event: options.event,
-      payload: options.payload,
-      tools,
-      context: toolContext,
-      logEnabled: this.runtimeLogEnabled
+    const explicitCardInvocation = directExperienceCardInvocation(options.event, options.payload.messages);
+    if (explicitCardInvocation) {
+      const decision = planCardDecision({
+        messages: options.payload.messages,
+        requestedAction: actionForCardToolName(explicitCardInvocation.name),
+        allowProactive: false
+      });
+      if (decision) {
+        const directCard = await runPlannedExperienceCard({
+          decision,
+          focus: stringValue(explicitCardInvocation.input.focus),
+          limit: numberValue(explicitCardInvocation.input.limit, 12),
+          options,
+          tools,
+          context: toolContext,
+          cardSkill: this.cardSkill,
+          dynamicCardsEnabled: this.dynamicCardsEnabled,
+          gatewayTimeoutMs: this.gatewayTimeoutMs,
+          logEnabled: this.runtimeLogEnabled
+        });
+        if (directCard) {
+          this.memoryStore.rememberAssistantReply(options.payload.conversation_id, directCard.reply);
+          return directCard;
+        }
+      }
+    }
+    const taskControlEnabled = enabledByDefault(this.env, "DIREXIO_AGENT_TASK_CONTROL");
+    const taskPlan = taskControlEnabled
+      ? planTask(latestUserMessageContent(options.payload.messages), memory)
+      : directTaskPlan();
+    const evidenceLedger = new EvidenceLedger();
+    logRuntimeEvent(this.runtimeLogEnabled, {
+      type: "agent_task_plan",
+      mode: taskPlan.mode,
+      required_capabilities: taskPlan.requiredCapabilities
     });
-    if (directCard) {
-      this.memoryStore.rememberAssistantReply(options.payload.conversation_id, directCard.reply);
-      return directCard;
+    if (taskPlan.mode === "clarify") {
+      const reply = clarificationReply(latestUserMessageContent(options.payload.messages));
+      this.memoryStore.rememberAssistantReply(options.payload.conversation_id, reply);
+      return { ok: true, reply };
+    }
+    if (taskPlan.mode === "direct") {
+      const decision = planCardDecision({
+        messages: options.payload.messages,
+        allowProactive: this.proactiveCardsEnabled
+      });
+      const allowed = decision && (!decision.proactive || this.proactiveCardGate.allow(options.payload.conversation_id));
+      if (decision && allowed) {
+        const card = await runPlannedExperienceCard({
+          decision,
+          focus: latestUserMessageContent(options.payload.messages),
+          limit: 12,
+          options,
+          tools,
+          context: toolContext,
+          cardSkill: this.cardSkill,
+          dynamicCardsEnabled: this.dynamicCardsEnabled,
+          gatewayTimeoutMs: this.gatewayTimeoutMs,
+          logEnabled: this.runtimeLogEnabled
+        });
+        if (card) {
+          if (decision.proactive) this.proactiveCardGate.mark(options.payload.conversation_id);
+          this.memoryStore.rememberAssistantReply(options.payload.conversation_id, card.reply);
+          return card;
+        }
+      }
+    }
+    let requiredTool: AgentTool | undefined;
+    if (taskPlan.mode === "external_evidence") {
+      requiredTool = findToolForCapabilities(tools, taskPlan.requiredCapabilities);
+      if (!requiredTool) {
+        const reply = externalEvidenceFailureReply(latestUserMessageContent(options.payload.messages));
+        this.memoryStore.rememberAssistantReply(options.payload.conversation_id, reply);
+        return { ok: true, reply };
+      }
+      const startedAt = Date.now();
+      let toolResult;
+      try {
+        toolResult = await requiredTool.run({ query: taskPlan.searchQuery || latestUserMessageContent(options.payload.messages) }, toolContext);
+      } catch (error) {
+        toolResult = {
+          name: requiredTool.name,
+          ok: false,
+          content: error instanceof Error ? error.message : "Required tool failed."
+        };
+      }
+      const evidence = evidenceLedger.record(requiredTool, toolResult);
+      logRuntimeEvent(this.runtimeLogEnabled, {
+        type: "agent_required_tool",
+        tool_name: requiredTool.name,
+        ok: evidence.ok,
+        duration_ms: Date.now() - startedAt
+      });
+      if (!taskPlan.requiredCapabilities.every((capability) => evidenceLedger.satisfies(capability))) {
+        const noResults = /no useful|no search results/i.test(toolResult.content);
+        const reply = externalEvidenceFailureReply(latestUserMessageContent(options.payload.messages), noResults);
+        this.memoryStore.rememberAssistantReply(options.payload.conversation_id, reply);
+        return { ok: true, reply };
+      }
     }
     const model = new DirexioGatewayChatModel({
       gatewayUrl: options.gatewayUrl,
@@ -183,18 +305,21 @@ class LangChainAgentRuntime implements AgentRuntime {
         });
       }
     });
+    const toolsForAgent = requiredTool ? tools.filter((item) => item.name !== requiredTool?.name) : tools;
+    const systemPrompt = buildSystemPrompt(memory, taskPlan, evidenceLedger);
     const agent = createAgent({
       model,
-      tools: tools.map((agentTool) => createLangChainTool(
+      tools: toolsForAgent.map((agentTool) => createLangChainTool(
         agentTool,
         toolContext,
         this.runtimeLogEnabled,
+        evidenceLedger,
         (content) => {
           outboundContent = content;
         }
       )),
       checkpointer: this.checkpointer,
-      systemPrompt: buildSystemPrompt(memory)
+      systemPrompt
     });
 
     try {
@@ -205,7 +330,37 @@ class LangChainAgentRuntime implements AgentRuntime {
           recursionLimit: recursionLimitForModelCalls(this.maxModelCalls)
         }
       );
-      const rawReply = finalAssistantReply(result);
+      let rawReply = finalAssistantReply(result);
+      if (taskPlan.mode === "external_evidence") {
+        let validation = validateCompletion(taskPlan, evidenceLedger, rawReply);
+        logRuntimeEvent(this.runtimeLogEnabled, {
+          type: "agent_completion_validation",
+          ok: validation.ok,
+          reason: validation.reason
+        });
+        if (!validation.ok) {
+          logRuntimeEvent(this.runtimeLogEnabled, { type: "agent_answer_retry", retry_count: 1 });
+          const retryMessage = await model.invoke([
+            { role: "system", content: systemPrompt },
+            ...options.payload.messages.map(toLangChainMessageLike),
+            { role: "assistant", content: rawReply },
+            { role: "system", content: completionRetryInstruction(validation.reason, evidenceLedger) }
+          ]);
+          rawReply = contentString(asRecord(retryMessage).content).trim();
+          validation = validateCompletion(taskPlan, evidenceLedger, rawReply);
+          logRuntimeEvent(this.runtimeLogEnabled, {
+            type: "agent_completion_validation",
+            ok: validation.ok,
+            reason: validation.reason,
+            retry_count: 1
+          });
+          if (!validation.ok) {
+            const reply = externalEvidenceFailureReply(latestUserMessageContent(options.payload.messages));
+            this.memoryStore.rememberAssistantReply(options.payload.conversation_id, reply);
+            return { ok: true, reply };
+          }
+        }
+      }
       const finalStructuredContent = agentActionResultContentFromText(rawReply);
       const effectiveOutboundContent = finalStructuredContent || outboundContent;
       const structuredSummary = effectiveOutboundContent
@@ -316,31 +471,64 @@ class LangChainAgentRuntime implements AgentRuntime {
   }
 }
 
-async function runDirectExperienceCardTool({
-  event,
-  payload,
+async function runPlannedExperienceCard({
+  decision,
+  focus,
+  limit,
+  options,
   tools,
   context,
+  cardSkill,
+  dynamicCardsEnabled,
+  gatewayTimeoutMs,
   logEnabled
 }: {
-  event: Record<string, unknown>;
-  payload: { messages: GatewayMessage[] };
+  decision: CardDecision;
+  focus: string;
+  limit: number;
+  options: AgentRuntimeRunOptions;
   tools: AgentTool[];
   context: AgentToolContext;
+  cardSkill: CardGenerationSkill;
+  dynamicCardsEnabled: boolean;
+  gatewayTimeoutMs: number;
   logEnabled: boolean;
 }): Promise<DirectCardRuntimeResult | null> {
-  const invocation = directExperienceCardInvocation(event, payload.messages);
-  if (!invocation) return null;
-  const agentTool = tools.find((item) => item.name === invocation.name);
+  const toolName = toolNameForAgentAction(decision.action);
+  const agentTool = tools.find((item) => item.name === toolName);
   if (!agentTool) return null;
   const startedAt = Date.now();
   try {
-    const result = await agentTool.run(invocation.input, context);
-    const outboundContent = result.ok ? agentActionResultContentFromText(result.content) : "";
+    const fallbackResult = await agentTool.run({ focus, limit }, context);
+    let outboundContent = fallbackResult.ok ? agentActionResultContentFromText(fallbackResult.content) : "";
+    let generatedBy = "local_fallback";
+    if (dynamicCardsEnabled) {
+      const generated = await cardSkill.generate({
+        action: decision.action,
+        state: decision.state,
+        focus,
+        messages: options.payload.messages,
+        memory: context.memory,
+        nodeId: options.payload.node_id,
+        conversationId: options.payload.conversation_id,
+        model: options.payload.model,
+        gatewayUrl: options.gatewayUrl,
+        aiToken: options.aiToken,
+        fetchImpl: options.fetchImpl,
+        timeoutMs: gatewayTimeoutMs
+      });
+      if (generated.ok) {
+        outboundContent = JSON.stringify(generated.card);
+        generatedBy = "card_skill";
+      }
+    }
     logRuntimeEvent(logEnabled, {
-      type: "agent_direct_card_tool",
+      type: "agent_card_generation",
       tool_name: agentTool.name,
-      ok: result.ok && Boolean(outboundContent),
+      ok: Boolean(outboundContent),
+      proactive: decision.proactive,
+      state: decision.state,
+      generated_by: generatedBy,
       duration_ms: Date.now() - startedAt
     });
     if (!outboundContent) return null;
@@ -376,6 +564,13 @@ function directExperienceCardInvocation(
   }
   const name = directExperienceCardToolNameFromText(text);
   return name ? { name, input: { focus: extractDirectExperienceFocus(text), limit: 12 } } : null;
+}
+
+function actionForCardToolName(name: string): AgentActionName | undefined {
+  if (name === "create_persona_card") return "persona_card";
+  if (name === "create_memory_capsule") return "memory_capsule";
+  if (name === "create_mood_card") return "mood_card";
+  return undefined;
 }
 
 function directExperienceCardToolNameFromText(text: string): string {
@@ -422,6 +617,7 @@ function createLangChainTool(
   agentTool: AgentTool,
   context: AgentToolContext,
   logEnabled: boolean,
+  evidenceLedger: EvidenceLedger,
   captureStructuredContent: (content: string) => void
 ) {
   return tool(
@@ -429,6 +625,7 @@ function createLangChainTool(
       const startedAt = Date.now();
       try {
         const result = await agentTool.run(asRecord(input), context);
+        evidenceLedger.record(agentTool, result);
         const structuredContent = agentActionResultContentFromText(result.content);
         if (structuredContent) captureStructuredContent(structuredContent);
         logRuntimeEvent(logEnabled, {
@@ -555,7 +752,7 @@ function isExperienceCardTool(name: string): boolean {
  * Errors:
  * - None.
  */
-function buildSystemPrompt(memory: ThreadMemorySnapshot): string {
+function buildSystemPrompt(memory: ThreadMemorySnapshot, taskPlan?: TaskPlan, evidenceLedger?: EvidenceLedger): string {
   const relevant = (memory.relevantMemories || [])
     .map((item) => item.text)
     .filter(Boolean)
@@ -574,6 +771,13 @@ function buildSystemPrompt(memory: ThreadMemorySnapshot): string {
   const memoryBlock = memoryLines.length
     ? `Thread memory:\n${memoryLines.join("\n")}`
     : "";
+  const evidenceBlock = taskPlan?.mode === "external_evidence" && evidenceLedger?.promptContext()
+    ? [
+        "Task control: current external evidence was required and has already been collected.",
+        "Answer the user now from this evidence. Do not promise to search later or claim that web access is unavailable.",
+        evidenceLedger.promptContext()
+      ].join("\n")
+    : "";
   return [
     "You are Direxio AI, a helpful AI friend inside a private Direxio conversation.",
     "Use local read-only tools only when they help answer the user. Do not claim access to conversations or contacts unless a tool result provides that data.",
@@ -582,8 +786,17 @@ function buildSystemPrompt(memory: ThreadMemorySnapshot): string {
     "Card tools already include approved thread memory. Do not call memory_save for a generated card unless the user explicitly asks to remember or save it.",
     "Keep answers concise by default, and explain tool limits plainly when a requested tool is disabled.",
     "When a tool returns direxio.agent_action_result.v1, render a compact card: title, one-sentence summary, up to three bullets, and one next action. Do not paste raw JSON.",
-    memoryBlock
+    memoryBlock,
+    evidenceBlock
   ].filter(Boolean).join("\n\n");
+}
+
+function directTaskPlan(): TaskPlan {
+  return {
+    mode: "direct",
+    requiredCapabilities: [],
+    reason: "Task control is disabled."
+  };
 }
 
 function toLangChainMessageLike(message: GatewayMessage): BaseMessageLike {
@@ -624,6 +837,10 @@ function contentString(value: unknown): string {
 
 function stringValue(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function numberValue(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

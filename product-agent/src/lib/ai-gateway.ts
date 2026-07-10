@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance } from "fastify";
+import {
+  createTavilySearchProvider,
+  SearchProviderError,
+  type HostedSearchProvider
+} from "./hosted-search.js";
 import type {
   GatewayChatRequest,
   GatewayMessage,
@@ -15,6 +20,7 @@ export interface AiGatewayOptions {
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
   logger?: boolean;
+  searchProvider?: HostedSearchProvider;
 }
 
 export class ModelProviderError extends Error {
@@ -44,6 +50,16 @@ export function createAiGatewayApp(options: AiGatewayOptions = {}): FastifyInsta
   const modelClient = options.modelClient || createDefaultModelClient({
     env,
     fetchImpl: options.fetchImpl
+  });
+  const searchProvider = options.searchProvider || createTavilySearchProvider({
+    apiKey: env.TAVILY_API_KEY,
+    endpoint: env.TAVILY_SEARCH_URL,
+    fetchImpl: options.fetchImpl,
+    timeoutMs: integerFromEnv(env.TAVILY_SEARCH_TIMEOUT_MS, 12000, 1000, 30000)
+  });
+  const searchLimiter = createFixedWindowLimiter({
+    limit: integerFromEnv(env.DIREXIO_SEARCH_REQUESTS_PER_MINUTE, 60, 1, 10000),
+    windowMs: 60000
   });
   const debugProvider = env.DIREXIO_AI_GATEWAY_DEBUG_PROVIDER === "1";
 
@@ -114,7 +130,62 @@ export function createAiGatewayApp(options: AiGatewayOptions = {}): FastifyInsta
     }
   });
 
+  app.post("/v1/tools/web-search", async (request, reply) => {
+    const token = bearerToken(request.headers.authorization || "");
+    if (!token || !(await verifyToken(token))) {
+      return reply.status(401).send({
+        error: {
+          code: "invalid_token",
+          message: "Invalid Direxio AI token."
+        }
+      });
+    }
+    if (!searchLimiter.allow(token)) {
+      return reply.status(429).send({
+        error: {
+          code: "search_rate_limited",
+          message: "Hosted search rate limit exceeded."
+        }
+      });
+    }
+
+    let query: string;
+    try {
+      query = validateSearchRequest(request.body);
+    } catch (error) {
+      return reply.status(400).send({
+        error: {
+          code: "invalid_search_request",
+          message: errorMessage(error)
+        }
+      });
+    }
+
+    try {
+      const result = await searchProvider(query);
+      return reply.status(200).send({
+        query: result.query,
+        results: result.results,
+        request_id: result.requestId || randomUUID()
+      });
+    } catch (error) {
+      const status = error instanceof SearchProviderError ? error.status : 503;
+      return reply.status(status).send({
+        error: {
+          code: error instanceof SearchProviderError ? error.code : "search_unavailable",
+          message: status === 429 ? "Hosted search quota exceeded." : "Hosted search is temporarily unavailable."
+        }
+      });
+    }
+  });
+
   return app;
+}
+
+export function validateSearchRequest(body: unknown): string {
+  const query = requiredString(asRecord(body).query, "query");
+  if (query.length > 500) throw new Error("query must be at most 500 characters");
+  return query;
 }
 
 export function validateChatRequest(body: unknown): GatewayChatRequest {
@@ -413,6 +484,28 @@ function errorMessage(error: unknown): string {
 function errorStatusCode(error: unknown): number {
   const record = asRecord(error);
   return typeof record.statusCode === "number" ? record.statusCode : 500;
+}
+
+function integerFromEnv(value: string | undefined, fallback: number, min: number, max: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(min, Math.min(max, Math.floor(parsed))) : fallback;
+}
+
+function createFixedWindowLimiter(options: { limit: number; windowMs: number }) {
+  const buckets = new Map<string, { startedAt: number; count: number }>();
+  return {
+    allow(key: string): boolean {
+      const now = Date.now();
+      const bucket = buckets.get(key);
+      if (!bucket || now - bucket.startedAt >= options.windowMs) {
+        buckets.set(key, { startedAt: now, count: 1 });
+        return true;
+      }
+      if (bucket.count >= options.limit) return false;
+      bucket.count += 1;
+      return true;
+    }
+  };
 }
 
 function stripTrailingSlash(value: string): string {

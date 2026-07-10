@@ -14,6 +14,7 @@ import { createDevIntegrationApp } from "../product-agent/src/bin/dev-integratio
 import { officialExperienceAbilityManifests } from "../product-agent/src/lib/abilities/official-experience-abilities.js";
 import { toAgentMessageEvent } from "../product-agent/src/lib/message-server-adapter.js";
 import { callHostedGateway } from "../product-agent/src/lib/hosted-gateway-client.js";
+import { createTavilySearchProvider } from "../product-agent/src/lib/hosted-search.js";
 import type { CurrentThreadMcpClient, CurrentThreadSearchInput } from "../product-agent/src/lib/mcp/current-thread-mcp-client.js";
 import { parseMemoryCandidates, type MemoryCandidate } from "../product-agent/src/lib/memory/memory-candidate.js";
 import type { MemoryCandidateExtractor } from "../product-agent/src/lib/memory/memory-extractor.js";
@@ -21,6 +22,9 @@ import { evaluateMemoryCandidate } from "../product-agent/src/lib/memory/memory-
 import { FileBackedThreadMemoryStore } from "../product-agent/src/lib/memory/file-thread-memory.js";
 import { InMemoryThreadMemoryStore } from "../product-agent/src/lib/memory/thread-memory.js";
 import { createLangChainAgentRuntime } from "../product-agent/src/lib/runtime/langchain-runtime.js";
+import { planCardDecision } from "../product-agent/src/lib/runtime/card-planner.js";
+import { planTask } from "../product-agent/src/lib/runtime/task-control.js";
+import { parseGeneratedCard } from "../product-agent/src/lib/skills/card-generation-skill.js";
 
 interface InjectableApp {
   inject(options: {
@@ -47,6 +51,8 @@ function createAgentServiceApp(options: AgentServiceOptions = {}) {
 await testGatewayAuthAndSuccess();
 await testGatewayExplicitRealModelMode();
 await testGatewayForwardsOpenAIToolDefinitionsAndCalls();
+await testGatewayHostedSearchAuthAndNormalization();
+await testTavilySearchRetriesAndHidesProviderKey();
 await testHostedGatewayTimeout();
 await testGatewayHidesProviderDebugByDefault();
 await testGatewayShowsProviderDebugWhenEnabled();
@@ -71,11 +77,20 @@ await testAgentAddsPersonaCardToolContext();
 await testLangChainRuntimeUsesGatewayToolCalls();
 await testLangChainRuntimeUsesExperienceCardToolCall();
 await testLangChainRuntimeForcesStructuredCardForExplicitCardRequest();
+testAdaptiveCardPlannerAndParser();
+await testLangChainDynamicCardFallsBackOnInvalidSkillOutput();
+await testLangChainProactiveCardRespectsCooldown();
 await testLangChainRuntimePromotesStructuredFinalReply();
 await testLangChainRuntimeUsesMemorySaveToolCall();
 await testLangChainRuntimeExposesDisabledMcpCurrentThreadTool();
 await testLangChainRuntimeUsesFakeMcpCurrentThreadTool();
 await testLangChainRuntimeStopsAtModelCallLimit();
+testTaskPlannerClassifiesRequirementsInsteadOfWeatherTasks();
+await testLangChainTaskControlRequiresSearchEvidence();
+await testLangChainTaskControlUsesOwnerLocationMemory();
+await testLangChainTaskControlClarifiesMissingLocation();
+await testLangChainTaskControlRetriesEmptyPromiseOnce();
+await testLangChainTaskControlDoesNotModelAnswerSearchFailure();
 testAutomaticMemoryCandidateParserAndPolicy();
 testOwnerMemoryPersistsAcrossThreadsAndRestart();
 await testDefaultAutomaticMemoryExtractorUsesGatewayJson();
@@ -529,6 +544,79 @@ async function testHostedGatewayTimeout(): Promise<void> {
     assert.equal(result.status, 504);
     assert.equal(result.error.code, "gateway_timeout");
   }
+}
+
+async function testGatewayHostedSearchAuthAndNormalization(): Promise<void> {
+  const queries: string[] = [];
+  const app = createAiGatewayApp({
+    verifyToken: async (token) => token === "dxai_ok",
+    searchProvider: async (query) => {
+      queries.push(query);
+      return {
+        query,
+        requestId: "search-request-1",
+        results: [{
+          title: "Shanghai weather forecast",
+          url: "https://weather.example/shanghai",
+          snippet: "Tomorrow will be cloudy with a high of 28 C."
+        }]
+      };
+    }
+  });
+  await app.ready();
+  try {
+    const unauthorized = await injectJson(app, "/v1/tools/web-search", { query: "Shanghai weather" });
+    assert.equal(unauthorized.status, 401);
+    const success = await injectJson(app, "/v1/tools/web-search", { query: "Shanghai weather" }, "dxai_ok");
+    assert.equal(success.status, 200);
+    assert.deepEqual(queries, ["Shanghai weather"]);
+    assert.equal(success.body.request_id, "search-request-1");
+    const results = success.body.results as Array<Record<string, unknown>>;
+    assert.equal(results.length, 1);
+    assert.equal(results[0]?.title, "Shanghai weather forecast");
+    assert.equal(Object.hasOwn(success.body, "provider"), false);
+  } finally {
+    await app.close();
+  }
+}
+
+async function testTavilySearchRetriesAndHidesProviderKey(): Promise<void> {
+  let attempts = 0;
+  const provider = createTavilySearchProvider({
+    apiKey: "tvly-secret-test-key",
+    fetchImpl: async (_url, init) => {
+      attempts += 1;
+      assert.equal((init?.headers as Record<string, string>).Authorization, "Bearer tvly-secret-test-key");
+      const request = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+      assert.equal(request.search_depth, "basic");
+      assert.equal(request.max_results, 5);
+      if (attempts === 1) {
+        return new Response(JSON.stringify({ error: "temporary" }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      return new Response(JSON.stringify({
+        query: "latest AI news",
+        request_id: "tavily-request-1",
+        results: [{
+          title: "AI update",
+          url: "https://news.example/ai",
+          content: "A current AI update.",
+          raw_content: "must not be forwarded"
+        }]
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  });
+  const result = await provider("latest AI news");
+  assert.equal(attempts, 2);
+  assert.equal(result.requestId, "tavily-request-1");
+  assert.equal(result.results[0]?.snippet, "A current AI update.");
+  assert.equal(JSON.stringify(result).includes("tvly-secret-test-key"), false);
+  assert.equal(JSON.stringify(result).includes("raw_content"), false);
 }
 
 async function testGatewayHidesProviderDebugByDefault(): Promise<void> {
@@ -1472,11 +1560,20 @@ async function testLangChainRuntimeForcesStructuredCardForExplicitCardRequest():
     aiToken: "dxai_ok",
     gatewayUrl: "http://gateway.test",
     runtime,
-    fetchImpl: async () => {
+    fetchImpl: async (_url, init) => {
       gatewayCalls += 1;
-      return new Response(JSON.stringify({ reply: "plain text should not be used" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
+      const payload = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+      assert.equal(payload.task, "card_generation");
+      const messages = payload.messages as Array<Record<string, unknown>>;
+      assert.match(String(messages[1]?.content), /response_style/);
+      return jsonResponse({
+        reply: JSON.stringify({
+          action: "mood_card",
+          title: "专注推进",
+          summary: "你正在把复杂 Agent 机制逐步跑通。",
+          points: ["偏好简短表达", "任务控制已进入验证"],
+          nextActions: ["完成一次端到端测试"]
+        })
       });
     }
   });
@@ -1492,12 +1589,14 @@ async function testLangChainRuntimeForcesStructuredCardForExplicitCardRequest():
       ]
     });
     assert.equal(response.status, 200);
-    assert.equal(gatewayCalls, 0);
+    assert.equal(gatewayCalls, 1);
     const outbound = asRecord(response.body.outbound_message);
     const card = JSON.parse(String(outbound.content)) as Record<string, unknown>;
     assert.equal(card.schema, "direxio.agent_action_result.v1");
     assert.equal(card.action, "mood_card");
-    assert.equal((card.points as string[]).some((point) => point.includes("response_style")), true);
+    assert.equal(card.title, "专注推进");
+    assert.equal((card.points as string[]).includes("偏好简短表达"), true);
+    assert.equal(asRecord(card.privacy).defaultVisibility, "private");
   } finally {
     await app.close();
   }
@@ -1538,6 +1637,126 @@ async function testLangChainRuntimePromotesStructuredFinalReply(): Promise<void>
     const outbound = asRecord(response.body.outbound_message);
     assert.equal(outbound.conversation_id, "langchain-structured-final-room");
     assert.deepEqual(JSON.parse(String(outbound.content)), JSON.parse(rawCard));
+  } finally {
+    await app.close();
+  }
+}
+
+function testAdaptiveCardPlannerAndParser(): void {
+  const generic = planCardDecision({
+    messages: [{ role: "user", content: "我们终于把搜索任务跑通了，给我生成一张卡片" }],
+    allowProactive: true
+  });
+  assert.equal(generic?.action, "mood_card");
+  assert.equal(generic?.state, "milestone");
+  assert.equal(generic?.proactive, false);
+
+  const proactive = planCardDecision({
+    messages: [{ role: "user", content: "我们终于把搜索任务跑通了" }],
+    allowProactive: true
+  });
+  assert.equal(proactive?.proactive, true);
+  assert.equal(proactive?.state, "milestone");
+
+  const card = parseGeneratedCard(JSON.stringify({
+    action: "memory_capsule",
+    title: "任务控制决策",
+    summary: "搜索能力采用证据驱动的完成检查。",
+    points: ["使用通用能力分类", "失败时不让模型编造"],
+    nextActions: ["部署网关"]
+  }), "memory_capsule");
+  assert.equal(card?.schema, "direxio.agent_action_result.v1");
+  assert.equal(card?.privacy.shareRequiresUserAction, true);
+  assert.equal(parseGeneratedCard("not json", "memory_capsule"), null);
+  assert.equal(parseGeneratedCard(JSON.stringify({
+    action: "mood_card",
+    title: "wrong action",
+    summary: "wrong",
+    points: ["wrong"]
+  }), "memory_capsule"), null);
+}
+
+async function testLangChainDynamicCardFallsBackOnInvalidSkillOutput(): Promise<void> {
+  let gatewayCalls = 0;
+  const runtime = createLangChainAgentRuntime({ autoMemoryEnabled: false, env: {} as NodeJS.ProcessEnv });
+  const app = createAgentServiceApp({
+    aiToken: "dxai_ok",
+    gatewayUrl: "http://gateway.test",
+    runtime,
+    fetchImpl: async () => {
+      gatewayCalls += 1;
+      return jsonResponse({ reply: "this is not card JSON" });
+    }
+  });
+  await app.ready();
+  try {
+    const response = await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "dynamic-card-fallback-room",
+      messages: [{ sender: "user", content: "今日状态卡" }]
+    });
+    assert.equal(response.status, 200);
+    assert.equal(gatewayCalls, 1);
+    const card = JSON.parse(String(asRecord(response.body.outbound_message).content)) as Record<string, unknown>;
+    assert.equal(card.schema, "direxio.agent_action_result.v1");
+    assert.equal(card.action, "mood_card");
+    assert.notEqual(card.summary, "this is not card JSON");
+  } finally {
+    await app.close();
+  }
+}
+
+async function testLangChainProactiveCardRespectsCooldown(): Promise<void> {
+  let cardCalls = 0;
+  let chatCalls = 0;
+  const runtime = createLangChainAgentRuntime({
+    autoMemoryEnabled: false,
+    env: { DIREXIO_AGENT_CARD_COOLDOWN_MINUTES: "360" } as NodeJS.ProcessEnv
+  });
+  const app = createAgentServiceApp({
+    aiToken: "dxai_ok",
+    gatewayUrl: "http://gateway.test",
+    runtime,
+    fetchImpl: async (_url, init) => {
+      const payload = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+      if (payload.task === "card_generation") {
+        cardCalls += 1;
+        return jsonResponse({
+          reply: JSON.stringify({
+            action: "mood_card",
+            title: "阶段完成",
+            summary: "任务控制层已经跑通。",
+            points: ["证据检查已完成", "单消息路径保持稳定"],
+            nextActions: ["进入下一轮"]
+          })
+        });
+      }
+      chatCalls += 1;
+      return jsonResponse({ reply: "继续保持这个节奏。" });
+    }
+  });
+  await app.ready();
+  try {
+    const first = await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "proactive-card-cooldown-room",
+      messages: [{ sender: "user", content: "我们终于把任务控制层跑通了" }]
+    });
+    assert.equal(first.status, 200);
+    assert.equal(JSON.parse(String(asRecord(first.body.outbound_message).content)).action, "mood_card");
+
+    const second = await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "proactive-card-cooldown-room",
+      messages: [{ sender: "user", content: "我们又完成了第二轮测试" }]
+    });
+    assert.equal(second.status, 200);
+    assert.equal(second.body.reply, "继续保持这个节奏。");
+    assert.equal(cardCalls, 1);
+    assert.equal(chatCalls, 1);
   } finally {
     await app.close();
   }
@@ -1787,6 +2006,193 @@ async function testLangChainRuntimeStopsAtModelCallLimit(): Promise<void> {
   }
 }
 
+function testTaskPlannerClassifiesRequirementsInsteadOfWeatherTasks(): void {
+  const memory = new InMemoryThreadMemoryStore().snapshot("planner-room");
+  const weather = planTask("上海明天天气怎么样？", memory);
+  assert.equal(weather.mode, "external_evidence");
+  assert.deepEqual(weather.requiredCapabilities, ["fresh_information"]);
+  assert.equal(Object.hasOwn(weather, "taskType"), false);
+  const stable = planTask("解释一下 TypeScript interface", memory);
+  assert.equal(stable.mode, "direct");
+  const publicSearch = planTask("联网搜索最近的 AI 新闻", memory);
+  assert.equal(publicSearch.mode, "external_evidence");
+  assert.deepEqual(publicSearch.requiredCapabilities, ["public_web", "fresh_information"]);
+}
+
+async function testLangChainTaskControlRequiresSearchEvidence(): Promise<void> {
+  const calls: string[] = [];
+  const runtime = createLangChainAgentRuntime({ autoMemoryEnabled: false, env: {} as NodeJS.ProcessEnv });
+  const app = createAgentServiceApp({
+    aiToken: "dxai_ok",
+    gatewayUrl: "http://gateway.test",
+    runtime,
+    fetchImpl: async (url, init) => {
+      calls.push(String(url));
+      if (String(url).endsWith("/v1/tools/web-search")) {
+        const request = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+        assert.match(String(request.query), /上海/);
+        return hostedSearchResponse("上海明天天气", "Tomorrow will be cloudy, 22-28 C.");
+      }
+      const request = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+      const messages = request.messages as Array<Record<string, unknown>>;
+      assert.equal(messages.some((message) => String(message.content).includes("Verified external evidence")), true);
+      return jsonResponse({ reply: "上海明天多云，22-28°C。" });
+    }
+  });
+  await app.ready();
+  try {
+    const response = await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "task-control-weather-room",
+      messages: [{ sender: "user", content: "上海明天天气怎么样？" }]
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.reply, "上海明天多云，22-28°C。");
+    assert.equal(asRecord(response.body.outbound_message).content, "上海明天多云，22-28°C。");
+    assert.deepEqual(calls, [
+      "http://gateway.test/v1/tools/web-search",
+      "http://gateway.test/v1/chat"
+    ]);
+  } finally {
+    await app.close();
+  }
+}
+
+async function testLangChainTaskControlUsesOwnerLocationMemory(): Promise<void> {
+  const memoryStore = new InMemoryThreadMemoryStore();
+  memoryStore.saveMemory("profile-setup", {
+    text: "User lives in Shanghai",
+    key: "profile.location.city",
+    scope: "owner",
+    type: "fact",
+    source: "automatic_extraction"
+  });
+  let searchQuery = "";
+  const runtime = createLangChainAgentRuntime({
+    autoMemoryEnabled: false,
+    memoryStore,
+    env: {} as NodeJS.ProcessEnv
+  });
+  const app = createAgentServiceApp({
+    aiToken: "dxai_ok",
+    gatewayUrl: "http://gateway.test",
+    runtime,
+    fetchImpl: async (url, init) => {
+      if (String(url).endsWith("/v1/tools/web-search")) {
+        searchQuery = String((JSON.parse(String(init?.body || "{}")) as Record<string, unknown>).query);
+        return hostedSearchResponse("Shanghai weather tomorrow", "Cloudy tomorrow.");
+      }
+      return jsonResponse({ reply: "按你记住的城市上海：明天多云。" });
+    }
+  });
+  await app.ready();
+  try {
+    const response = await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "task-control-owner-location-room",
+      messages: [{ sender: "user", content: "明天天气怎么样？" }]
+    });
+    assert.equal(response.status, 200);
+    assert.match(searchQuery, /User lives in Shanghai/);
+    assert.equal(response.body.reply, "按你记住的城市上海：明天多云。");
+  } finally {
+    await app.close();
+  }
+}
+
+async function testLangChainTaskControlClarifiesMissingLocation(): Promise<void> {
+  let networkCalls = 0;
+  const runtime = createLangChainAgentRuntime({ autoMemoryEnabled: false, env: {} as NodeJS.ProcessEnv });
+  const app = createAgentServiceApp({
+    aiToken: "dxai_ok",
+    gatewayUrl: "http://gateway.test",
+    runtime,
+    fetchImpl: async () => {
+      networkCalls += 1;
+      throw new Error("missing location must not call the network");
+    }
+  });
+  await app.ready();
+  try {
+    const response = await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "task-control-clarify-room",
+      messages: [{ sender: "user", content: "明天天气怎么样？" }]
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.reply, "你想查询哪个城市或地区？");
+    assert.equal(networkCalls, 0);
+  } finally {
+    await app.close();
+  }
+}
+
+async function testLangChainTaskControlRetriesEmptyPromiseOnce(): Promise<void> {
+  let modelCalls = 0;
+  const runtime = createLangChainAgentRuntime({ autoMemoryEnabled: false, env: {} as NodeJS.ProcessEnv });
+  const app = createAgentServiceApp({
+    aiToken: "dxai_ok",
+    gatewayUrl: "http://gateway.test",
+    runtime,
+    fetchImpl: async (url) => {
+      if (String(url).endsWith("/v1/tools/web-search")) {
+        return hostedSearchResponse("Shanghai weather tomorrow", "Sunny tomorrow, 24-30 C.");
+      }
+      modelCalls += 1;
+      return jsonResponse({ reply: modelCalls === 1 ? "我帮你查一下。" : "上海明天晴，24-30°C。" });
+    }
+  });
+  await app.ready();
+  try {
+    const response = await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "task-control-retry-room",
+      messages: [{ sender: "user", content: "上海明天天气怎么样？" }]
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.reply, "上海明天晴，24-30°C。");
+    assert.equal(modelCalls, 2);
+  } finally {
+    await app.close();
+  }
+}
+
+async function testLangChainTaskControlDoesNotModelAnswerSearchFailure(): Promise<void> {
+  let modelCalls = 0;
+  const runtime = createLangChainAgentRuntime({ autoMemoryEnabled: false, env: {} as NodeJS.ProcessEnv });
+  const app = createAgentServiceApp({
+    aiToken: "dxai_ok",
+    gatewayUrl: "http://gateway.test",
+    runtime,
+    fetchImpl: async (url) => {
+      if (String(url).endsWith("/v1/tools/web-search")) {
+        return jsonResponse({ error: { code: "search_unavailable" } }, 503);
+      }
+      modelCalls += 1;
+      return jsonResponse({ reply: "fabricated answer" });
+    }
+  });
+  await app.ready();
+  try {
+    const response = await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "task-control-search-failure-room",
+      messages: [{ sender: "user", content: "上海明天天气怎么样？" }]
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.reply, "暂时无法联网查询，请稍后再试。");
+    assert.equal(modelCalls, 0);
+    assert.equal(JSON.stringify(response.body).includes("search_unavailable"), false);
+  } finally {
+    await app.close();
+  }
+}
+
 async function testAgentRemembersThreadPreferences(): Promise<void> {
   const captured: unknown[] = [];
   const app = createAgentServiceApp({
@@ -2030,15 +2436,11 @@ async function testAgentWebSearchIsEnabledByDefault(): Promise<void> {
     aiToken: "dxai_ok",
     gatewayUrl: "http://gateway.test",
     fetchImpl: async (url, init) => {
-      if (String(url).includes("api.duckduckgo.com")) {
-        return new Response(JSON.stringify({
-          Heading: "LangChain",
-          AbstractText: "LangChain is a framework for building applications with language models.",
-          RelatedTopics: [{ Text: "LangGraph supports agent workflows." }]
-        }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" }
-        });
+      if (String(url).endsWith("/v1/tools/web-search")) {
+        return hostedSearchResponse(
+          "LangChain latest information",
+          "LangChain is a framework for building applications with language models."
+        );
       }
       captured.push(JSON.parse(String(init?.body || "{}")));
       return new Response(JSON.stringify({ reply: "web enabled" }), {
@@ -2300,6 +2702,25 @@ function aiEvent(): Record<string, unknown> {
     conversation_id: "ai-room",
     messages: [{ sender: "user", content: "hello ai" }]
   };
+}
+
+function hostedSearchResponse(query: string, snippet: string): Response {
+  return jsonResponse({
+    query,
+    request_id: "hosted-search-test-request",
+    results: [{
+      title: "Verified search result",
+      url: "https://example.com/result",
+      snippet
+    }]
+  });
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" }
+  });
 }
 
 async function injectJson(app: InjectableApp, url: string, body: unknown, token?: string): Promise<{

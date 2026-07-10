@@ -12,6 +12,8 @@ export interface AgentToolRunOptions {
   tools: AgentTool[];
   fetchImpl: FetchLike;
   env: NodeJS.ProcessEnv;
+  gatewayUrl?: string;
+  aiToken?: string;
 }
 
 export async function runSelectedAgentTools(options: AgentToolRunOptions): Promise<AgentToolResult[]> {
@@ -23,7 +25,9 @@ export async function runSelectedAgentTools(options: AgentToolRunOptions): Promi
     memory: options.memory,
     memoryStore: options.memoryStore,
     fetchImpl: options.fetchImpl,
-    env: options.env
+    env: options.env,
+    gatewayUrl: options.gatewayUrl,
+    aiToken: options.aiToken
   };
   const results: AgentToolResult[] = [];
 

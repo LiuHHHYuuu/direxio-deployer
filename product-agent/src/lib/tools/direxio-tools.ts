@@ -1,4 +1,5 @@
 import type { CurrentThreadMcpClient } from "../mcp/current-thread-mcp-client.js";
+import { callHostedSearch } from "../hosted-search-client.js";
 import type { GatewayMessage } from "../types.js";
 import { createAgentExperienceTools } from "./agent-experience-tools.js";
 import { createMcpCurrentThreadTool } from "./mcp-current-thread-tool.js";
@@ -87,7 +88,9 @@ export function createDirexioReadOnlyTools(options: DirexioReadOnlyToolsOptions 
         description: "联网搜索公开网页；默认关闭，需要节点开启。",
         category: "web",
         permissions: [{ scope: "public_web", access: "read", required: true }],
-        defaultEnabled: true
+        defaultEnabled: true,
+        capabilities: ["public_web", "fresh_information"],
+        produces: ["search_results", "sources"]
       }),
       run: async (input, context) => runWebSearch(input, context)
     },
@@ -102,50 +105,54 @@ function recentMessages(context: AgentToolContext, limit: number): GatewayMessag
 
 async function runWebSearch(input: Record<string, unknown>, context: AgentToolContext): Promise<AgentToolResult> {
   const query = stringInput(input.query);
-  if (!query) return ok("web_search", "No web search query was provided.");
+  if (!query) return { name: "web_search", ok: false, content: "No web search query was provided." };
   if (!webSearchEnabled(context.env)) {
-    return ok("web_search", "联网搜索暂未开启。");
+    return { name: "web_search", ok: false, content: "Web search is disabled." };
   }
-
-  const endpoint = context.env.DIREXIO_WEB_SEARCH_URL || "https://api.duckduckgo.com/";
-  const url = new URL(endpoint);
-  if (!context.env.DIREXIO_WEB_SEARCH_URL) {
-    url.searchParams.set("q", query);
-    url.searchParams.set("format", "json");
-    url.searchParams.set("no_redirect", "1");
-    url.searchParams.set("no_html", "1");
-  }
-
-  const response = await context.fetchImpl(url, context.env.DIREXIO_WEB_SEARCH_URL
-    ? {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query })
-      }
-    : undefined);
-  if (!response.ok) {
+  if (!context.gatewayUrl || !context.aiToken) {
     return {
       name: "web_search",
       ok: false,
-      content: `Web search failed with status ${response.status}.`
+      content: "Hosted web search credentials are unavailable."
     };
   }
-
-  const body = await response.json().catch(() => ({})) as Record<string, unknown>;
-  return ok("web_search", formatWebSearchBody(body));
+  const result = await callHostedSearch({
+    gatewayUrl: context.gatewayUrl,
+    aiToken: context.aiToken,
+    query,
+    fetchImpl: context.fetchImpl
+  });
+  if (!result.ok) {
+    return {
+      name: "web_search",
+      ok: false,
+      content: `Hosted web search failed: ${result.code}.`
+    };
+  }
+  if (result.response.results.length === 0) {
+    return { name: "web_search", ok: false, content: "No useful web search result was returned." };
+  }
+  return {
+    name: "web_search",
+    ok: true,
+    content: formatHostedSearchResponse(result.response.query, result.response.results),
+    sources: result.response.results.map((item) => item.url)
+  };
 }
 
-function formatWebSearchBody(body: Record<string, unknown>): string {
-  const answer = stringInput(body.AbstractText || body.answer || body.summary);
-  const heading = stringInput(body.Heading || body.title);
-  const related = Array.isArray(body.RelatedTopics)
-    ? body.RelatedTopics
-        .map((topic) => typeof topic === "object" && topic !== null ? stringInput((topic as Record<string, unknown>).Text) : "")
-        .filter(Boolean)
-        .slice(0, 3)
-    : [];
-  const parts = [heading, answer, ...related].filter(Boolean);
-  return parts.length ? parts.join("\n") : "No useful web search result was returned.";
+function formatHostedSearchResponse(
+  query: string,
+  results: Array<{ title: string; url: string; snippet: string; publishedAt?: string }>
+): string {
+  return [
+    `Search results for: ${query}`,
+    ...results.map((item, index) => [
+      `${index + 1}. ${item.title}`,
+      item.snippet,
+      ...(item.publishedAt ? [`Published: ${item.publishedAt}`] : []),
+      `Source: ${item.url}`
+    ].join("\n"))
+  ].join("\n\n");
 }
 
 function webSearchEnabled(env: NodeJS.ProcessEnv): boolean {

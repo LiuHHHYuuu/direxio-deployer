@@ -12,6 +12,7 @@ export interface AgentToolResult {
   name: string;
   ok: boolean;
   content: string;
+  sources?: string[];
 }
 
 export type AgentToolPermissionScope =
@@ -41,6 +42,8 @@ export interface AgentToolManifest {
   outputKind: "text" | "agent_action_result";
   triggerExamples?: string[];
   shareable?: boolean;
+  capabilities?: string[];
+  produces?: string[];
 }
 
 export interface AgentToolContext {
@@ -50,6 +53,8 @@ export interface AgentToolContext {
   memoryStore?: ThreadMemoryStore;
   fetchImpl: FetchLike;
   env: NodeJS.ProcessEnv;
+  gatewayUrl?: string;
+  aiToken?: string;
 }
 
 export interface AgentTool {

@@ -31,6 +31,8 @@ export interface LocalAgentRuntimeOptions {
 export interface PrepareAgentPayloadOptions {
   event: Record<string, unknown>;
   payload: GatewayChatRequest;
+  gatewayUrl?: string;
+  aiToken?: string;
 }
 
 export interface PreparedAgentPayload {
@@ -59,7 +61,9 @@ export function createLocalAgentRuntime(options: LocalAgentRuntimeOptions = {}):
     async run(options: AgentRuntimeRunOptions) {
       const prepared = await this.preparePayload({
         event: options.event,
-        payload: options.payload
+        payload: options.payload,
+        gatewayUrl: options.gatewayUrl,
+        aiToken: options.aiToken
       });
       const gatewayResponse = await callHostedGateway({
         gatewayUrl: options.gatewayUrl,
@@ -92,7 +96,7 @@ export function createLocalAgentRuntime(options: LocalAgentRuntimeOptions = {}):
       }
       return gatewayResponse;
     },
-    async preparePayload({ event, payload }) {
+    async preparePayload({ event, payload, gatewayUrl, aiToken }) {
       memoryStore.rememberMessages(payload.conversation_id, payload.messages);
       const snapshot = memoryStore.snapshot(payload.conversation_id);
       const relevantMemories = await memoryStore.searchMemories(payload.conversation_id, {
@@ -114,7 +118,9 @@ export function createLocalAgentRuntime(options: LocalAgentRuntimeOptions = {}):
         memoryStore,
         tools,
         fetchImpl,
-        env
+        env,
+        gatewayUrl,
+        aiToken
       });
       const outboundContent = agentActionResultContentFromToolResults(toolResults);
 
