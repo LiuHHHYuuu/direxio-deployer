@@ -20,7 +20,7 @@ reads, raw MCP JSON replies, and canonical memory capture of third-party data.
 | 4 | Done | MCP-to-memory isolation | Automatic-memory and compression regression tests |
 | 5 | Done | Product Agent image/config wiring and docs | Render/config checks |
 | 6 | Done | Full local and container verification | Check, test, build, container smoke |
-| 7 | Pending | `codex1` deployment and redacted live probe | Counts/status only |
+| 7 | Done | `codex1` deployment and redacted live probe | Counts/status only |
 
 Local loop evidence:
 
@@ -37,6 +37,20 @@ Local loop evidence:
 - `npm run check`, `npm test`, `npm run build`, `npm run smoke:container`,
   rendered Compose checks, `docker compose config --quiet`, and
   `git diff --check` pass.
+
+Remote loop evidence:
+
+- `codex1.p2pagent.im` runs
+  `direxio/product-agent:readonly-mcp-504a1ec` while Message Server remains
+  healthy.
+- The protected MCP environment is present and `.env` remains mode `600`.
+- A real stdio `list_contacts` call returned a valid collection without printing
+  its contents.
+- `/v1/agent/tools` exposed all six read-only names and neither write name.
+- A real Agent turn returned one matching reply/outbound message with no raw
+  JSON.
+- The probe conversation received a persisted private-data marker and zero
+  active `thread_summary` memories.
 
 ## Loop 1: MCP Client
 
