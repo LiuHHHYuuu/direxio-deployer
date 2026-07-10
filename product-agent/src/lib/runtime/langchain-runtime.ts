@@ -7,6 +7,11 @@ import {
   parseAgentActionContent,
   toolNameForAgentAction
 } from "../abilities/action-protocol.js";
+import { runAutomaticMemory } from "../memory/automatic-memory.js";
+import {
+  GatewayMemoryCandidateExtractor,
+  type MemoryCandidateExtractor
+} from "../memory/memory-extractor.js";
 import {
   InMemoryThreadMemoryStore,
   latestUserMessageContent,
@@ -37,6 +42,8 @@ export interface LangChainAgentRuntimeOptions {
   gatewayTimeoutMs?: number;
   currentThreadMcpClient?: CurrentThreadMcpClient;
   promptSkillStore?: PromptSkillStore;
+  memoryExtractor?: MemoryCandidateExtractor;
+  autoMemoryEnabled?: boolean;
 }
 
 export function createLangChainAgentRuntime(options: LangChainAgentRuntimeOptions = {}): AgentRuntime {
@@ -67,6 +74,12 @@ class LangChainAgentRuntime implements AgentRuntime {
   private readonly maxModelCalls: number;
   private readonly gatewayTimeoutMs: number;
   private readonly runtimeLogEnabled: boolean;
+  private readonly memoryExtractor: MemoryCandidateExtractor;
+  private readonly autoMemoryEnabled: boolean;
+  private readonly autoMemoryTimeoutMs: number;
+  private readonly autoMemoryMaxCandidates: number;
+  private readonly autoMemoryMinConfidence: number;
+  private readonly autoMemoryMinImportance: number;
 
   constructor(options: LangChainAgentRuntimeOptions) {
     this.env = options.env || process.env;
@@ -74,6 +87,7 @@ class LangChainAgentRuntime implements AgentRuntime {
     this.staticTools = options.tools;
     this.currentThreadMcpClient = options.currentThreadMcpClient;
     this.promptSkillStore = options.promptSkillStore;
+    this.memoryExtractor = options.memoryExtractor || new GatewayMemoryCandidateExtractor();
     this.fetchImpl = options.fetchImpl || globalThis.fetch;
     this.checkpointer = options.checkpointer || new MemorySaver();
     this.maxModelCalls = options.maxModelCalls || numberFromEnv({
@@ -91,6 +105,23 @@ class LangChainAgentRuntime implements AgentRuntime {
       max: 120000
     });
     this.runtimeLogEnabled = flagFromEnv(this.env, "DIREXIO_AGENT_RUNTIME_LOG");
+    this.autoMemoryEnabled = options.autoMemoryEnabled ?? enabledByDefault(this.env, "DIREXIO_AGENT_AUTO_MEMORY");
+    this.autoMemoryTimeoutMs = numberFromEnv({
+      env: this.env,
+      key: "DIREXIO_AGENT_AUTO_MEMORY_TIMEOUT_MS",
+      fallback: 5000,
+      min: 100,
+      max: 30000
+    });
+    this.autoMemoryMaxCandidates = numberFromEnv({
+      env: this.env,
+      key: "DIREXIO_AGENT_AUTO_MEMORY_MAX_CANDIDATES",
+      fallback: 3,
+      min: 1,
+      max: 10
+    });
+    this.autoMemoryMinConfidence = scoreFromEnv(this.env, "DIREXIO_AGENT_AUTO_MEMORY_MIN_CONFIDENCE", 0.8);
+    this.autoMemoryMinImportance = scoreFromEnv(this.env, "DIREXIO_AGENT_AUTO_MEMORY_MIN_IMPORTANCE", 0.55);
   }
 
   async run(options: AgentRuntimeRunOptions): Promise<AgentRuntimeResult> {
@@ -194,6 +225,12 @@ class LangChainAgentRuntime implements AgentRuntime {
         };
       }
       this.memoryStore.rememberAssistantReply(options.payload.conversation_id, reply);
+      await this.rememberAutomatically({
+        options,
+        reply,
+        recentMessages: memory.recentMessages,
+        fetchImpl: effectiveFetch
+      });
       return {
         ok: true,
         reply,
@@ -229,6 +266,53 @@ class LangChainAgentRuntime implements AgentRuntime {
       currentThreadMcpClient: this.currentThreadMcpClient,
       promptSkillStore: this.promptSkillStore
     }).tools;
+  }
+
+  private async rememberAutomatically({
+    options,
+    reply,
+    recentMessages,
+    fetchImpl
+  }: {
+    options: AgentRuntimeRunOptions;
+    reply: string;
+    recentMessages: GatewayMessage[];
+    fetchImpl: FetchLike;
+  }): Promise<void> {
+    if (!this.autoMemoryEnabled) return;
+    const startedAt = Date.now();
+    try {
+      const changes = await runAutomaticMemory({
+        extractor: this.memoryExtractor,
+        store: this.memoryStore,
+        nodeId: options.payload.node_id,
+        conversationId: options.payload.conversation_id,
+        model: options.payload.model,
+        latestUserMessage: latestUserMessageContent(options.payload.messages),
+        assistantReply: reply,
+        recentMessages: [...recentMessages, { role: "assistant", content: reply }],
+        gatewayUrl: options.gatewayUrl,
+        aiToken: options.aiToken,
+        fetchImpl,
+        timeoutMs: this.autoMemoryTimeoutMs,
+        maxCandidates: this.autoMemoryMaxCandidates,
+        minConfidence: this.autoMemoryMinConfidence,
+        minImportance: this.autoMemoryMinImportance
+      });
+      logRuntimeEvent(this.runtimeLogEnabled, {
+        type: "agent_auto_memory",
+        ok: true,
+        changes: changes.filter((change) => change.action !== "noop").length,
+        duration_ms: Date.now() - startedAt
+      });
+    } catch (error) {
+      logRuntimeEvent(this.runtimeLogEnabled, {
+        type: "agent_auto_memory",
+        ok: false,
+        duration_ms: Date.now() - startedAt,
+        error_name: error instanceof Error ? error.name : "UnknownError"
+      });
+    }
   }
 }
 
@@ -383,6 +467,16 @@ function logRuntimeEvent(enabled: boolean, event: Record<string, unknown>): void
     component: "direxio_product_agent",
     ...event
   }));
+}
+
+function enabledByDefault(env: NodeJS.ProcessEnv, key: string): boolean {
+  const value = env[key]?.trim().toLowerCase();
+  return value !== "0" && value !== "false";
+}
+
+function scoreFromEnv(env: NodeJS.ProcessEnv, key: string, fallback: number): number {
+  const value = Number(env[key]);
+  return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : fallback;
 }
 
 function schemaForTool(name: string) {

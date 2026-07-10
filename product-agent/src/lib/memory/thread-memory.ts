@@ -1,12 +1,17 @@
 import type { GatewayMessage } from "../types.js";
 import type { ThreadMemorySearchInput } from "./vector-memory.js";
+import { containsCredentialLikeSecret, redactCredentialLikeSecrets } from "./memory-safety.js";
 
 export const DEFAULT_CONTEXT_WINDOW_MESSAGES = 30;
 export const DEFAULT_COMPRESSION_CHUNK_MESSAGES = 12;
 
 export type AgentMemoryItemType = "preference" | "fact" | "card_memory" | "skill_result" | "thread_summary";
 
-export type AgentMemoryItemSource = "user_explicit" | "agent_card_save" | "prompt_skill" | "migration" | "auto_compression";
+export type AgentMemoryItemSource = "user_explicit" | "agent_card_save" | "prompt_skill" | "migration" | "auto_compression" | "automatic_extraction";
+
+export type AgentMemoryScope = "owner" | "conversation";
+
+export type AgentMemorySensitivity = "low" | "sensitive" | "secret";
 
 export interface AgentMemoryItem {
   id: string;
@@ -16,6 +21,15 @@ export interface AgentMemoryItem {
   text: string;
   tags: string[];
   source: AgentMemoryItemSource;
+  key?: string;
+  scope?: AgentMemoryScope;
+  confidence?: number;
+  importance?: number;
+  sensitivity?: AgentMemorySensitivity;
+  evidence?: string;
+  lastUsedAt?: string;
+  useCount?: number;
+  supersededBy?: string;
   createdAt: string;
   updatedAt: string;
   deletedAt?: string;
@@ -44,6 +58,12 @@ export interface SaveAgentMemoryInput {
   text: string;
   tags?: string[];
   source?: AgentMemoryItemSource;
+  key?: string;
+  scope?: AgentMemoryScope;
+  confidence?: number;
+  importance?: number;
+  sensitivity?: AgentMemorySensitivity;
+  evidence?: string;
 }
 
 interface ThreadMemoryState {
@@ -62,6 +82,7 @@ export interface InMemoryThreadMemoryStoreOptions {
 
 export class InMemoryThreadMemoryStore implements ThreadMemoryStore {
   private readonly threads = new Map<string, ThreadMemoryState>();
+  private readonly ownerMemories: AgentMemoryItem[] = [];
   private readonly compressionChunkMessages: number;
   private readonly autoCompact: boolean;
   private readonly trimWhenOverLimit: boolean;
@@ -108,15 +129,19 @@ export class InMemoryThreadMemoryStore implements ThreadMemoryStore {
 
   snapshot(conversationId: string): ThreadMemorySnapshot {
     const state = this.stateFor(conversationId);
+    const persistentMemories = this.visibleMemories(conversationId);
     return {
-      preferences: { ...state.preferences },
+      preferences: {
+        ...preferencesFromMemoryItems(persistentMemories),
+        ...state.preferences
+      },
       recentMessages: [...state.recentMessages],
-      persistentMemories: activeMemories(state.persistentMemories)
+      persistentMemories
     };
   }
 
   listMemories(conversationId: string): AgentMemoryItem[] {
-    return activeMemories(this.stateFor(conversationId).persistentMemories);
+    return this.visibleMemories(conversationId);
   }
 
   async searchMemories(conversationId: string, input: ThreadMemorySearchInput): Promise<AgentMemoryItem[]> {
@@ -132,20 +157,30 @@ export class InMemoryThreadMemoryStore implements ThreadMemoryStore {
       ownerId: "in-memory",
       now
     });
-    upsertMemoryItem(state.persistentMemories, itemInput);
-    if (itemInput.type === "preference") {
-      Object.assign(state.preferences, preferencesFromMemoryItems(state.persistentMemories));
+    const items = input.scope === "owner" ? this.ownerMemories : state.persistentMemories;
+    upsertMemoryItem(items, itemInput);
+    if (itemInput.type === "preference" && input.scope !== "owner") {
+      Object.assign(state.preferences, preferencesFromMemoryItems(this.visibleMemories(conversationId)));
     }
-    return memoryItemById(state.persistentMemories, itemInput.id);
+    return memoryItemById(items, itemInput.id);
   }
 
   deleteMemory(conversationId: string, id: string): boolean {
     const state = this.stateFor(conversationId);
-    const deleted = softDeleteMemoryItem(state.persistentMemories, id, this.now().toISOString());
+    const now = this.now().toISOString();
+    const deleted = softDeleteMemoryItem(state.persistentMemories, id, now) ||
+      softDeleteMemoryItem(this.ownerMemories, id, now);
     if (deleted) {
       state.preferences = preferencesFromMemoryItems(state.persistentMemories);
     }
     return deleted;
+  }
+
+  private visibleMemories(conversationId: string): AgentMemoryItem[] {
+    return activeMemories([
+      ...this.ownerMemories,
+      ...this.stateFor(conversationId).persistentMemories
+    ]);
   }
 
   compactRecentMessages(conversationId: string, options: { persist?: boolean; ownerId?: string } = {}): AgentMemoryItem[] {
@@ -269,7 +304,9 @@ function summarizeMessageChunk(messages: GatewayMessage[]): string {
     .filter((line) => line.length > 0)
     .slice(0, 8);
   if (lines.length === 0) return "";
-  return truncateMemoryText(`Compressed earlier thread context:\n${lines.map((line) => `- ${truncateLine(line, 120)}`).join("\n")}`);
+  return truncateMemoryText(redactCredentialLikeSecrets(
+    `Compressed earlier thread context:\n${lines.map((line) => `- ${truncateLine(line, 120)}`).join("\n")}`
+  ));
 }
 
 function threadSummaryMemoryId(conversationId: string, messages: GatewayMessage[], offset: number): string {
@@ -312,6 +349,9 @@ export function extractExplicitMemoryFromMessage(message: GatewayMessage): Expli
     return { preferences: {}, factText: "" };
   }
   const content = message.content.trim();
+  if (containsCredentialLikeSecret(content)) {
+    return { preferences: {}, factText: "" };
+  }
   const normalized = content.toLowerCase();
   if (!isExplicitRememberRequest(content, normalized)) {
     return { preferences: {}, factText: "" };
@@ -384,6 +424,12 @@ interface UpsertMemoryItemInput {
   text: string;
   tags: string[];
   source: AgentMemoryItemSource;
+  key?: string;
+  scope?: AgentMemoryScope;
+  confidence?: number;
+  importance?: number;
+  sensitivity?: AgentMemorySensitivity;
+  evidence?: string;
   now: string;
 }
 
@@ -411,16 +457,30 @@ interface MemoryItemInputForSaveOptions {
 export function memoryItemInputForSave(options: MemoryItemInputForSaveOptions): UpsertMemoryItemInput {
   const text = options.input.text.trim();
   if (!text) throw new Error("memory text must be non-empty");
+  if (containsCredentialLikeSecret(text)) throw new Error("memory text contains credential-like secret");
   const type = options.input.type || "fact";
   const tags = normalizedTags(options.input.tags);
   return {
-    id: options.input.id || memoryIdForSave(options.conversationId, type, text, tags),
+    id: options.input.id || memoryIdForSave(
+      options.conversationId,
+      type,
+      text,
+      tags,
+      options.input.key,
+      options.input.scope
+    ),
     ownerId: options.ownerId,
     conversationId: options.conversationId,
     type,
     text: truncateMemoryText(text),
     tags: tagsForMemory(type, tags),
     source: options.input.source || "user_explicit",
+    ...(options.input.key ? { key: options.input.key } : {}),
+    ...(options.input.scope ? { scope: options.input.scope } : {}),
+    ...(typeof options.input.confidence === "number" ? { confidence: options.input.confidence } : {}),
+    ...(typeof options.input.importance === "number" ? { importance: options.input.importance } : {}),
+    ...(options.input.sensitivity ? { sensitivity: options.input.sensitivity } : {}),
+    ...(options.input.evidence ? { evidence: options.input.evidence } : {}),
     now: options.now
   };
 }
@@ -445,6 +505,12 @@ export function upsertMemoryItem(items: AgentMemoryItem[], input: UpsertMemoryIt
       existing.text === input.text &&
       existing.type === input.type &&
       existing.source === input.source &&
+      existing.key === input.key &&
+      existing.scope === input.scope &&
+      existing.confidence === input.confidence &&
+      existing.importance === input.importance &&
+      existing.sensitivity === input.sensitivity &&
+      existing.evidence === input.evidence &&
       existing.deletedAt === undefined
     ) {
       return false;
@@ -455,6 +521,7 @@ export function upsertMemoryItem(items: AgentMemoryItem[], input: UpsertMemoryIt
     existing.text = input.text;
     existing.tags = [...input.tags];
     existing.source = input.source;
+    assignOptionalMemoryMetadata(existing, input);
     existing.updatedAt = input.now;
     delete existing.deletedAt;
     return true;
@@ -467,6 +534,12 @@ export function upsertMemoryItem(items: AgentMemoryItem[], input: UpsertMemoryIt
     text: input.text,
     tags: [...input.tags],
     source: input.source,
+    ...(input.key ? { key: input.key } : {}),
+    ...(input.scope ? { scope: input.scope } : {}),
+    ...(typeof input.confidence === "number" ? { confidence: input.confidence } : {}),
+    ...(typeof input.importance === "number" ? { importance: input.importance } : {}),
+    ...(input.sensitivity ? { sensitivity: input.sensitivity } : {}),
+    ...(input.evidence ? { evidence: input.evidence } : {}),
     createdAt: input.now,
     updatedAt: input.now
   });
@@ -618,7 +691,18 @@ function extractFactText(content: string): string {
   return truncateMemoryText((english || chinese || "").trim());
 }
 
-function memoryIdForSave(conversationId: string, type: AgentMemoryItemType, text: string, tags: string[]): string {
+function memoryIdForSave(
+  conversationId: string,
+  type: AgentMemoryItemType,
+  text: string,
+  tags: string[],
+  key?: string,
+  scope?: AgentMemoryScope
+): string {
+  if (key) {
+    const prefix = scope === "owner" ? "owner" : encodeIdPart(conversationId);
+    return `memory:${prefix}:${encodeIdPart(key)}`;
+  }
   const preferenceTag = tags.find((tag) => tag.startsWith("preference:"));
   if (type === "preference" && preferenceTag) {
     return preferenceMemoryId(conversationId, preferenceTag.slice("preference:".length));
@@ -627,6 +711,21 @@ function memoryIdForSave(conversationId: string, type: AgentMemoryItemType, text
     return preferenceMemoryId(conversationId, "custom");
   }
   return factMemoryId(conversationId, text);
+}
+
+function assignOptionalMemoryMetadata(existing: AgentMemoryItem, input: UpsertMemoryItemInput): void {
+  const fields: Array<keyof Pick<
+    AgentMemoryItem,
+    "key" | "scope" | "confidence" | "importance" | "sensitivity" | "evidence"
+  >> = ["key", "scope", "confidence", "importance", "sensitivity", "evidence"];
+  for (const field of fields) {
+    const value = input[field];
+    if (value === undefined) {
+      delete existing[field];
+    } else {
+      (existing as unknown as Record<string, unknown>)[field] = value;
+    }
+  }
 }
 
 function normalizedTags(tags: string[] | undefined): string[] {

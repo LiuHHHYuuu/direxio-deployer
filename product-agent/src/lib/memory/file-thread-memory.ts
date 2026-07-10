@@ -12,6 +12,8 @@ import {
   preferencesFromMemoryItems,
   softDeleteMemoryItem,
   type AgentMemoryItem,
+  type AgentMemoryScope,
+  type AgentMemorySensitivity,
   type AgentMemoryItemSource,
   type AgentMemoryItemType,
   type SaveAgentMemoryInput,
@@ -243,7 +245,8 @@ export class FileBackedThreadMemoryStore implements ThreadMemoryStore {
     const target = document.items.find((item) =>
       item.id === id &&
       !item.deletedAt &&
-      (!item.conversationId || item.conversationId === conversationId)
+      item.ownerId === this.ownerId &&
+      (item.scope === "owner" || !item.conversationId || item.conversationId === conversationId)
     );
     if (!target) return false;
     const deleted = softDeleteMemoryItem(document.items, id, this.now().toISOString());
@@ -253,7 +256,8 @@ export class FileBackedThreadMemoryStore implements ThreadMemoryStore {
 
   private itemsForConversation(conversationId: string): AgentMemoryItem[] {
     return activeMemories(this.readDocument().items)
-      .filter((item) => !item.conversationId || item.conversationId === conversationId);
+      .filter((item) => item.ownerId === this.ownerId)
+      .filter((item) => item.scope === "owner" || !item.conversationId || item.conversationId === conversationId);
   }
 
   private compactOrTrimRecentMessages(conversationId: string): void {
@@ -328,6 +332,17 @@ function normalizeMemoryItem(value: unknown): AgentMemoryItem | null {
       ? record.tags.filter((tag): tag is string => typeof tag === "string")
       : [],
     source,
+    ...(stringField(record.key) ? { key: stringField(record.key) } : {}),
+    ...(memoryScope(record.scope) ? { scope: memoryScope(record.scope) as AgentMemoryScope } : {}),
+    ...(numberField(record.confidence) !== undefined ? { confidence: numberField(record.confidence) } : {}),
+    ...(numberField(record.importance) !== undefined ? { importance: numberField(record.importance) } : {}),
+    ...(memorySensitivity(record.sensitivity)
+      ? { sensitivity: memorySensitivity(record.sensitivity) as AgentMemorySensitivity }
+      : {}),
+    ...(stringField(record.evidence) ? { evidence: stringField(record.evidence) } : {}),
+    ...(stringField(record.lastUsedAt) ? { lastUsedAt: stringField(record.lastUsedAt) } : {}),
+    ...(numberField(record.useCount) !== undefined ? { useCount: numberField(record.useCount) } : {}),
+    ...(stringField(record.supersededBy) ? { supersededBy: stringField(record.supersededBy) } : {}),
     createdAt,
     updatedAt,
     ...(stringField(record.deletedAt) ? { deletedAt: stringField(record.deletedAt) } : {})
@@ -349,9 +364,22 @@ function memoryItemSource(value: unknown): AgentMemoryItemSource | null {
     value === "agent_card_save" ||
     value === "prompt_skill" ||
     value === "migration" ||
-    value === "auto_compression"
+    value === "auto_compression" ||
+    value === "automatic_extraction"
     ? value
     : null;
+}
+
+function memoryScope(value: unknown): AgentMemoryScope | null {
+  return value === "owner" || value === "conversation" ? value : null;
+}
+
+function memorySensitivity(value: unknown): AgentMemorySensitivity | null {
+  return value === "low" || value === "sensitive" || value === "secret" ? value : null;
+}
+
+function numberField(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function stringField(value: unknown): string {

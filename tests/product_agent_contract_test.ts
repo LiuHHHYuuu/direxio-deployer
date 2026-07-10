@@ -15,6 +15,11 @@ import { officialExperienceAbilityManifests } from "../product-agent/src/lib/abi
 import { toAgentMessageEvent } from "../product-agent/src/lib/message-server-adapter.js";
 import { callHostedGateway } from "../product-agent/src/lib/hosted-gateway-client.js";
 import type { CurrentThreadMcpClient, CurrentThreadSearchInput } from "../product-agent/src/lib/mcp/current-thread-mcp-client.js";
+import { parseMemoryCandidates, type MemoryCandidate } from "../product-agent/src/lib/memory/memory-candidate.js";
+import type { MemoryCandidateExtractor } from "../product-agent/src/lib/memory/memory-extractor.js";
+import { evaluateMemoryCandidate } from "../product-agent/src/lib/memory/memory-policy.js";
+import { FileBackedThreadMemoryStore } from "../product-agent/src/lib/memory/file-thread-memory.js";
+import { InMemoryThreadMemoryStore } from "../product-agent/src/lib/memory/thread-memory.js";
 import { createLangChainAgentRuntime } from "../product-agent/src/lib/runtime/langchain-runtime.js";
 
 interface InjectableApp {
@@ -71,6 +76,11 @@ await testLangChainRuntimeUsesMemorySaveToolCall();
 await testLangChainRuntimeExposesDisabledMcpCurrentThreadTool();
 await testLangChainRuntimeUsesFakeMcpCurrentThreadTool();
 await testLangChainRuntimeStopsAtModelCallLimit();
+testAutomaticMemoryCandidateParserAndPolicy();
+testOwnerMemoryPersistsAcrossThreadsAndRestart();
+await testDefaultAutomaticMemoryExtractorUsesGatewayJson();
+await testLangChainRuntimeAutomaticallyCreatesUpdatesAndDeletesOwnerMemory();
+await testAutomaticMemoryFailureDoesNotBreakOrDuplicateReply();
 await testAgentRemembersThreadPreferences();
 await testAgentPersistsExplicitMemoryAcrossRestart();
 await testAgentRetrievesVectorMemoryIntoContext();
@@ -87,6 +97,305 @@ await testMessageServerAdapterAcceptsNativeAgentConversation();
 await testDevIntegrationServerEndToEnd();
 
 console.log("product agent contract ok");
+
+function testAutomaticMemoryCandidateParserAndPolicy(): void {
+  const candidates = parseMemoryCandidates(`\`\`\`json
+    {"candidates":[{
+      "operation":"create",
+      "key":"profile.location.city",
+      "text":"User lives in Shanghai",
+      "type":"fact",
+      "scope":"owner",
+      "confidence":0.96,
+      "importance":0.8,
+      "sensitivity":"low",
+      "evidence":"I live in Shanghai",
+      "reason":"Useful for local answers"
+    }]}
+  \`\`\``);
+  assert.equal(candidates.length, 1);
+  const accepted = evaluateMemoryCandidate(candidates[0] as MemoryCandidate, {
+    latestUserMessage: "I live in Shanghai",
+    explicitRequest: false
+  }, {
+    minConfidence: 0.8,
+    minImportance: 0.55
+  });
+  assert.equal(accepted.accepted, true);
+
+  const weatherOnly = evaluateMemoryCandidate({
+    ...(candidates[0] as MemoryCandidate),
+    evidence: "Shanghai"
+  }, {
+    latestUserMessage: "What is the weather in Shanghai today?",
+    explicitRequest: false
+  }, {
+    minConfidence: 0.8,
+    minImportance: 0.55
+  });
+  assert.equal(weatherOnly.accepted, false);
+  assert.equal(weatherOnly.reason, "location_not_durable");
+
+  const secret = evaluateMemoryCandidate({
+    ...(candidates[0] as MemoryCandidate),
+    key: "profile.provider.api",
+    text: "API key sk-secret123456",
+    evidence: "sk-secret123456",
+    sensitivity: "secret"
+  }, {
+    latestUserMessage: "My API key is sk-secret123456",
+    explicitRequest: true
+  }, {
+    minConfidence: 0.8,
+    minImportance: 0.55
+  });
+  assert.equal(secret.accepted, false);
+  assert.equal(secret.reason, "secret_detected");
+  const store = new InMemoryThreadMemoryStore();
+  assert.throws(() => store.saveMemory("secret-room", {
+    text: "API key sk-secret123456"
+  }), /credential-like secret/);
+  assert.deepEqual(parseMemoryCandidates("not json"), []);
+}
+
+function testOwnerMemoryPersistsAcrossThreadsAndRestart(): void {
+  const dataDir = mkdtempSync(join(tmpdir(), "direxio-owner-memory-"));
+  try {
+    const firstStore = new FileBackedThreadMemoryStore({ dataDir, ownerId: "owner-1" });
+    const saved = firstStore.saveMemory("owner-file-a", {
+      key: "profile.location.city",
+      scope: "owner",
+      text: "用户常住上海",
+      type: "fact",
+      source: "automatic_extraction",
+      confidence: 0.95,
+      importance: 0.8,
+      sensitivity: "low",
+      evidence: "我常住上海"
+    });
+    const restartedStore = new FileBackedThreadMemoryStore({ dataDir, ownerId: "owner-1" });
+    const visible = restartedStore.listMemories("owner-file-b");
+    assert.equal(visible.length, 1);
+    assert.equal(visible[0]?.id, saved.id);
+    assert.equal(visible[0]?.scope, "owner");
+    assert.equal(visible[0]?.confidence, 0.95);
+    assert.equal(restartedStore.deleteMemory("owner-file-b", saved.id), true);
+    assert.equal(restartedStore.listMemories("owner-file-a").length, 0);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+}
+
+async function testDefaultAutomaticMemoryExtractorUsesGatewayJson(): Promise<void> {
+  const memoryStore = new InMemoryThreadMemoryStore();
+  const tasks: string[] = [];
+  const runtime = createLangChainAgentRuntime({
+    memoryStore,
+    autoMemoryEnabled: true,
+    env: {} as NodeJS.ProcessEnv
+  });
+  const app = createAgentServiceApp({
+    aiToken: "dxai_ok",
+    gatewayUrl: "http://gateway.test",
+    runtime,
+    fetchImpl: async (_url, init) => {
+      const payload = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+      tasks.push(String(payload.task));
+      if (payload.task === "memory_extract") {
+        assert.equal(payload.tool_choice, "none");
+        return new Response(JSON.stringify({
+          reply: JSON.stringify({
+            candidates: [memoryCandidate({
+              key: "preference.response.length",
+              text: "用户偏好简短回复",
+              type: "preference",
+              evidence: "I prefer concise replies"
+            })]
+          })
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      return new Response(JSON.stringify({ reply: "Understood" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  });
+  await app.ready();
+  try {
+    const response = await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "gateway-memory-a",
+      messages: [{ sender: "user", content: "I prefer concise replies" }]
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.reply, "Understood");
+    assert.deepEqual(tasks, ["chat", "memory_extract"]);
+    const items = memoryStore.listMemories("gateway-memory-b");
+    assert.equal(items.length, 1);
+    assert.equal(items[0]?.key, "preference.response.length");
+    assert.equal(items[0]?.text, "用户偏好简短回复");
+  } finally {
+    await app.close();
+  }
+}
+
+async function testLangChainRuntimeAutomaticallyCreatesUpdatesAndDeletesOwnerMemory(): Promise<void> {
+  const memoryStore = new InMemoryThreadMemoryStore();
+  const extractor: MemoryCandidateExtractor = {
+    async extract(input) {
+      if (input.latestUserMessage.includes("搬到杭州")) {
+        return [memoryCandidate({
+          operation: "update",
+          text: "用户常住杭州",
+          evidence: "我已经搬到杭州"
+        })];
+      }
+      if (input.latestUserMessage.includes("忘记")) {
+        return [memoryCandidate({
+          operation: "delete",
+          text: "",
+          evidence: "忘记我住在哪里"
+        })];
+      }
+      if (input.latestUserMessage.includes("API Key")) {
+        return [memoryCandidate({
+          key: "profile.provider.api",
+          text: "API Key sk-secret123456",
+          evidence: "API Key 是 sk-secret123456",
+          sensitivity: "secret"
+        })];
+      }
+      return [memoryCandidate({
+        text: "用户常住上海",
+        evidence: "我常住上海"
+      })];
+    }
+  };
+  const runtime = createLangChainAgentRuntime({
+    memoryStore,
+    memoryExtractor: extractor,
+    autoMemoryEnabled: true,
+    env: {} as NodeJS.ProcessEnv
+  });
+  let gatewayCalls = 0;
+  const app = createAgentServiceApp({
+    aiToken: "dxai_ok",
+    gatewayUrl: "http://gateway.test",
+    runtime,
+    fetchImpl: async () => {
+      gatewayCalls += 1;
+      return new Response(JSON.stringify({ reply: "好的" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  });
+  await app.ready();
+  try {
+    const created = await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "owner-memory-a",
+      messages: [{ sender: "user", content: "我常住上海" }]
+    });
+    assert.equal(created.status, 200);
+    assert.equal(created.body.reply, "好的");
+    let items = memoryStore.listMemories("owner-memory-b");
+    assert.equal(items.length, 1);
+    assert.equal(items[0]?.key, "profile.location.city");
+    assert.equal(items[0]?.text, "用户常住上海");
+    assert.equal(items[0]?.scope, "owner");
+
+    await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "owner-memory-b",
+      messages: [{ sender: "user", content: "我已经搬到杭州" }]
+    });
+    items = memoryStore.listMemories("owner-memory-a");
+    assert.equal(items.length, 1);
+    assert.equal(items[0]?.text, "用户常住杭州");
+
+    await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "owner-memory-a",
+      messages: [{ sender: "user", content: "我的 API Key 是 sk-secret123456" }]
+    });
+    assert.equal(memoryStore.listMemories("owner-memory-a").length, 1);
+
+    await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "owner-memory-b",
+      messages: [{ sender: "user", content: "忘记我住在哪里" }]
+    });
+    assert.equal(memoryStore.listMemories("owner-memory-a").length, 0);
+    assert.equal(gatewayCalls, 4);
+  } finally {
+    await app.close();
+  }
+}
+
+async function testAutomaticMemoryFailureDoesNotBreakOrDuplicateReply(): Promise<void> {
+  const runtime = createLangChainAgentRuntime({
+    memoryExtractor: {
+      async extract() {
+        throw new Error("extractor unavailable");
+      }
+    },
+    autoMemoryEnabled: true,
+    env: {} as NodeJS.ProcessEnv
+  });
+  let gatewayCalls = 0;
+  const app = createAgentServiceApp({
+    aiToken: "dxai_ok",
+    gatewayUrl: "http://gateway.test",
+    runtime,
+    fetchImpl: async () => {
+      gatewayCalls += 1;
+      return new Response(JSON.stringify({ reply: "single reply" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  });
+  await app.ready();
+  try {
+    const response = await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "memory-failure-room",
+      messages: [{ sender: "user", content: "I live in Shanghai" }]
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.reply, "single reply");
+    assert.equal(asRecord(response.body.outbound_message).content, "single reply");
+    assert.equal(gatewayCalls, 1);
+  } finally {
+    await app.close();
+  }
+}
+
+function memoryCandidate(overrides: Partial<MemoryCandidate> = {}): MemoryCandidate {
+  return {
+    operation: "create",
+    key: "profile.location.city",
+    text: "用户常住上海",
+    type: "fact",
+    scope: "owner",
+    confidence: 0.96,
+    importance: 0.8,
+    sensitivity: "low",
+    evidence: "我常住上海",
+    reason: "Useful for local answers",
+    ...overrides
+  };
+}
 
 async function testGatewayAuthAndSuccess(): Promise<void> {
   const app = createAiGatewayApp({
@@ -1027,6 +1336,7 @@ async function testAgentAddsPersonaCardToolContext(): Promise<void> {
 async function testLangChainRuntimeUsesGatewayToolCalls(): Promise<void> {
   const captured: unknown[] = [];
   const runtime = createLangChainAgentRuntime({
+    autoMemoryEnabled: false,
     env: {} as NodeJS.ProcessEnv
   });
   const app = createAgentServiceApp({
@@ -1087,6 +1397,7 @@ async function testLangChainRuntimeUsesGatewayToolCalls(): Promise<void> {
 async function testLangChainRuntimeUsesExperienceCardToolCall(): Promise<void> {
   const captured: unknown[] = [];
   const runtime = createLangChainAgentRuntime({
+    autoMemoryEnabled: false,
     env: {} as NodeJS.ProcessEnv
   });
   const app = createAgentServiceApp({
@@ -1153,6 +1464,7 @@ async function testLangChainRuntimeUsesExperienceCardToolCall(): Promise<void> {
 async function testLangChainRuntimeForcesStructuredCardForExplicitCardRequest(): Promise<void> {
   let gatewayCalls = 0;
   const runtime = createLangChainAgentRuntime({
+    autoMemoryEnabled: false,
     env: {} as NodeJS.ProcessEnv
   });
   const app = createAgentServiceApp({
@@ -1200,6 +1512,7 @@ async function testLangChainRuntimePromotesStructuredFinalReply(): Promise<void>
     nextActions: ["Run the deployed App check"]
   });
   const runtime = createLangChainAgentRuntime({
+    autoMemoryEnabled: false,
     env: {} as NodeJS.ProcessEnv
   });
   const app = createAgentServiceApp({
@@ -1294,6 +1607,7 @@ async function testLangChainRuntimeUsesMemorySaveToolCall(): Promise<void> {
 async function testLangChainRuntimeExposesDisabledMcpCurrentThreadTool(): Promise<void> {
   const captured: unknown[] = [];
   const runtime = createLangChainAgentRuntime({
+    autoMemoryEnabled: false,
     env: {} as NodeJS.ProcessEnv
   });
   const app = createAgentServiceApp({
@@ -1362,6 +1676,7 @@ async function testLangChainRuntimeUsesFakeMcpCurrentThreadTool(): Promise<void>
     }
   };
   const runtime = createLangChainAgentRuntime({
+    autoMemoryEnabled: false,
     env: { DIREXIO_AGENT_MCP_CURRENT_THREAD: "1" } as NodeJS.ProcessEnv,
     currentThreadMcpClient
   });
@@ -1428,6 +1743,7 @@ async function testLangChainRuntimeUsesFakeMcpCurrentThreadTool(): Promise<void>
 async function testLangChainRuntimeStopsAtModelCallLimit(): Promise<void> {
   const captured: unknown[] = [];
   const runtime = createLangChainAgentRuntime({
+    autoMemoryEnabled: false,
     maxModelCalls: 1,
     env: {} as NodeJS.ProcessEnv
   });
@@ -1676,7 +1992,7 @@ async function testAgentAutoCompactsThreadContextWhenWindowExceeded(): Promise<v
       node_id: "node-1",
       conversation_id: "compact-memory-room",
       messages: [
-        { sender: "user", content: "old context alpha: we chose explicit memory first" },
+        { sender: "user", content: "old context alpha: we chose explicit memory first; API key sk-supersecret1234" },
         { sender: "assistant", content: "I explained explicit memory and vector search." },
         { sender: "user", content: "middle context beta: auto compression is next" },
         { sender: "assistant", content: "We will keep the newest messages live." },
@@ -1692,6 +2008,8 @@ async function testAgentAutoCompactsThreadContextWhenWindowExceeded(): Promise<v
     assert.match(String(summary?.text), /Compressed earlier thread context/);
     assert.match(String(summary?.text), /old context alpha/);
     assert.match(String(summary?.text), /vector search/);
+    assert.doesNotMatch(String(summary?.text), /sk-supersecret1234/);
+    assert.match(String(summary?.text), /\[redacted secret\]/);
 
     const payload = asRecord(captured[0]);
     const messages = payload.messages as Array<Record<string, unknown>>;

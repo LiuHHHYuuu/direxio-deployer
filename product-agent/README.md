@@ -276,11 +276,34 @@ DIREXIO_AGENT_EMBEDDING_MODEL=text-embedding-3-small
 DIREXIO_AGENT_EMBEDDING_API_KEY=...
 ```
 
-The first persistent version only writes explicit memory commands such as
-`remember concise replies in English` or `remember that my project codename is
-Memory Lab`, direct memory API calls, `memory_save` tool calls, card saves, or
-context-window compaction summaries. It does not auto-read or auto-save human
-chats outside the Agent thread.
+Automatic memory adds a separate post-reply pipeline for ordinary Agent-thread
+messages. A gateway-backed extractor proposes structured candidates, then local
+deterministic policy checks evidence, confidence, importance, sensitivity, and
+credential patterns before anything is written. Accepted owner-scoped memories
+use stable keys such as `profile.location.city`, so later corrections update one
+canonical item and forget requests soft-delete it. The pipeline is best-effort:
+it never creates a second chat message and extraction failure cannot turn a
+successful reply into an error.
+
+Automatic memory still does not read or save human chats outside the Agent
+thread. Credential-like secrets are rejected by automatic extraction, explicit
+memory saves, and the memory API/tool path. Context compaction redacts them
+before writing a summary.
+
+Automatic memory is controlled by:
+
+```env
+DIREXIO_AGENT_AUTO_MEMORY=1
+DIREXIO_AGENT_AUTO_MEMORY_MIN_CONFIDENCE=0.80
+DIREXIO_AGENT_AUTO_MEMORY_MIN_IMPORTANCE=0.55
+DIREXIO_AGENT_AUTO_MEMORY_MAX_CANDIDATES=3
+DIREXIO_AGENT_AUTO_MEMORY_TIMEOUT_MS=5000
+```
+
+The extractor adds one short gateway model call after a successful normal
+LangChain reply. Set `DIREXIO_AGENT_AUTO_MEMORY=0` to disable it. Existing
+explicit memory commands, direct memory API calls, `memory_save` tool calls,
+card saves, and context-window compaction remain available.
 
 Auto compaction is controlled by:
 
@@ -405,6 +428,15 @@ Runtime safety controls:
 
 - `DIREXIO_AGENT_DATA_DIR`: enables file-backed explicit memory. Leave unset for
   process-local memory only.
+- `DIREXIO_AGENT_AUTO_MEMORY`: enables model-assisted candidate extraction plus
+  local policy and canonical-key reconciliation. Defaults to `1`.
+- `DIREXIO_AGENT_AUTO_MEMORY_MIN_CONFIDENCE` and
+  `DIREXIO_AGENT_AUTO_MEMORY_MIN_IMPORTANCE`: reject low-confidence or low-value
+  automatic candidates. Defaults are `0.80` and `0.55`.
+- `DIREXIO_AGENT_AUTO_MEMORY_MAX_CANDIDATES`: maximum candidate operations per
+  turn. Defaults to `3`.
+- `DIREXIO_AGENT_AUTO_MEMORY_TIMEOUT_MS`: independent extraction-call timeout.
+  Defaults to `5000`.
 - `DIREXIO_AGENT_AUTO_COMPACT_MEMORY`: enables context-window compaction into
   `thread_summary` memories. Defaults to `1`.
 - `DIREXIO_AGENT_CONTEXT_WINDOW_MESSAGES`: recent-message window before
