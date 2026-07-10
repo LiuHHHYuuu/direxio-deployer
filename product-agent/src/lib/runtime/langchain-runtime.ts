@@ -42,6 +42,7 @@ import {
   EvidenceLedger,
   externalEvidenceFailureReply,
   findToolForCapabilities,
+  PendingTaskStore,
   planTask,
   validateCompletion,
   type TaskPlan
@@ -61,6 +62,7 @@ export interface LangChainAgentRuntimeOptions {
   memoryExtractor?: MemoryCandidateExtractor;
   autoMemoryEnabled?: boolean;
   cardSkill?: CardGenerationSkill;
+  pendingTaskTtlMs?: number;
 }
 
 export function createLangChainAgentRuntime(options: LangChainAgentRuntimeOptions = {}): AgentRuntime {
@@ -101,6 +103,7 @@ class LangChainAgentRuntime implements AgentRuntime {
   private readonly dynamicCardsEnabled: boolean;
   private readonly proactiveCardsEnabled: boolean;
   private readonly proactiveCardGate: ProactiveCardGate;
+  private readonly pendingTasks: PendingTaskStore;
 
   constructor(options: LangChainAgentRuntimeOptions) {
     this.env = options.env || process.env;
@@ -153,6 +156,13 @@ class LangChainAgentRuntime implements AgentRuntime {
       min: 1,
       max: 10080
     }) * 60000);
+    this.pendingTasks = new PendingTaskStore(options.pendingTaskTtlMs || numberFromEnv({
+      env: this.env,
+      key: "DIREXIO_AGENT_PENDING_TASK_TTL_MINUTES",
+      fallback: 10,
+      min: 1,
+      max: 120
+    }) * 60000);
   }
 
   async run(options: AgentRuntimeRunOptions): Promise<AgentRuntimeResult> {
@@ -182,6 +192,7 @@ class LangChainAgentRuntime implements AgentRuntime {
     };
     const explicitCardInvocation = directExperienceCardInvocation(options.event, options.payload.messages);
     if (explicitCardInvocation) {
+      this.pendingTasks.clear(options.payload.conversation_id);
       const decision = planCardDecision({
         messages: options.payload.messages,
         requestedAction: actionForCardToolName(explicitCardInvocation.name),
@@ -207,8 +218,12 @@ class LangChainAgentRuntime implements AgentRuntime {
       }
     }
     const taskControlEnabled = enabledByDefault(this.env, "DIREXIO_AGENT_TASK_CONTROL");
+    const latestUserMessage = latestUserMessageContent(options.payload.messages);
+    const resumedTaskPlan = taskControlEnabled
+      ? this.pendingTasks.resume(options.payload.conversation_id, latestUserMessage)
+      : null;
     const taskPlan = taskControlEnabled
-      ? planTask(latestUserMessageContent(options.payload.messages), memory)
+      ? resumedTaskPlan || planTask(latestUserMessage, memory)
       : directTaskPlan();
     const evidenceLedger = new EvidenceLedger();
     logRuntimeEvent(this.runtimeLogEnabled, {
@@ -217,7 +232,8 @@ class LangChainAgentRuntime implements AgentRuntime {
       required_capabilities: taskPlan.requiredCapabilities
     });
     if (taskPlan.mode === "clarify") {
-      const reply = clarificationReply(latestUserMessageContent(options.payload.messages));
+      this.pendingTasks.remember(options.payload.conversation_id, taskPlan, latestUserMessage);
+      const reply = clarificationReply(latestUserMessage);
       this.memoryStore.rememberAssistantReply(options.payload.conversation_id, reply);
       return { ok: true, reply };
     }

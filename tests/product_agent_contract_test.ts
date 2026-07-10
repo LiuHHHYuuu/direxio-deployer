@@ -89,6 +89,7 @@ testTaskPlannerClassifiesRequirementsInsteadOfWeatherTasks();
 await testLangChainTaskControlRequiresSearchEvidence();
 await testLangChainTaskControlUsesOwnerLocationMemory();
 await testLangChainTaskControlClarifiesMissingLocation();
+await testLangChainTaskControlResumesPendingLocation();
 await testLangChainTaskControlRetriesEmptyPromiseOnce();
 await testLangChainTaskControlDoesNotModelAnswerSearchFailure();
 testAutomaticMemoryCandidateParserAndPolicy();
@@ -2125,6 +2126,62 @@ async function testLangChainTaskControlClarifiesMissingLocation(): Promise<void>
     assert.equal(response.status, 200);
     assert.equal(response.body.reply, "你想查询哪个城市或地区？");
     assert.equal(networkCalls, 0);
+  } finally {
+    await app.close();
+  }
+}
+
+async function testLangChainTaskControlResumesPendingLocation(): Promise<void> {
+  const memoryStore = new InMemoryThreadMemoryStore();
+  let searchCalls = 0;
+  let modelCalls = 0;
+  let searchQuery = "";
+  const runtime = createLangChainAgentRuntime({
+    autoMemoryEnabled: false,
+    memoryStore,
+    env: {} as NodeJS.ProcessEnv
+  });
+  const app = createAgentServiceApp({
+    aiToken: "dxai_ok",
+    gatewayUrl: "http://gateway.test",
+    runtime,
+    fetchImpl: async (url, init) => {
+      if (String(url).endsWith("/v1/tools/web-search")) {
+        searchCalls += 1;
+        searchQuery = String((JSON.parse(String(init?.body || "{}")) as Record<string, unknown>).query);
+        return hostedSearchResponse("Shanghai weather tomorrow", "Cloudy tomorrow, 23-29 C.");
+      }
+      modelCalls += 1;
+      return jsonResponse({ reply: "上海明天多云，23-29°C。" });
+    }
+  });
+  await app.ready();
+  try {
+    const first = await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "task-control-pending-location-room",
+      messages: [{ sender: "user", content: "明天天气怎么样？" }]
+    });
+    assert.equal(first.status, 200);
+    assert.equal(first.body.reply, "你想查询哪个城市或地区？");
+    assert.equal(searchCalls, 0);
+    assert.equal(modelCalls, 0);
+
+    const second = await injectJson(app, "/v1/agent/messages", {
+      conversation_type: "direxio_ai",
+      node_id: "node-1",
+      conversation_id: "task-control-pending-location-room",
+      messages: [{ sender: "user", content: "上海" }]
+    });
+    assert.equal(second.status, 200);
+    assert.equal(second.body.reply, "上海明天多云，23-29°C。");
+    assert.equal(searchCalls, 1);
+    assert.equal(modelCalls, 1);
+    assert.match(searchQuery, /明天天气怎么样/);
+    assert.match(searchQuery, /User-provided location: 上海/);
+    assert.equal(memoryStore.listMemories("task-control-pending-location-room")
+      .some((item) => item.key === "profile.location.city"), false);
   } finally {
     await app.close();
   }

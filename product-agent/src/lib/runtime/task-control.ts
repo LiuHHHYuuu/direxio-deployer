@@ -24,9 +24,70 @@ export interface CompletionValidation {
   reason: string;
 }
 
+interface PendingTask {
+  plan: TaskPlan;
+  originalMessage: string;
+  expiresAt: number;
+}
+
 const PUBLIC_WEB_CAPABILITY = "public_web";
 const FRESH_INFORMATION_CAPABILITY = "fresh_information";
 const LOCATION_MEMORY_KEY = "profile.location.city";
+
+export class PendingTaskStore {
+  private readonly tasks = new Map<string, PendingTask>();
+
+  constructor(
+    private readonly ttlMs = 10 * 60 * 1000,
+    private readonly now: () => number = () => Date.now()
+  ) {}
+
+  remember(conversationId: string, plan: TaskPlan, originalMessage: string): void {
+    if (plan.mode !== "clarify" || !plan.missingFields?.length) return;
+    this.tasks.set(conversationId, {
+      plan: {
+        ...plan,
+        requiredCapabilities: [...plan.requiredCapabilities],
+        missingFields: [...plan.missingFields]
+      },
+      originalMessage: originalMessage.trim(),
+      expiresAt: this.now() + this.ttlMs
+    });
+  }
+
+  resume(conversationId: string, userMessage: string): TaskPlan | null {
+    const pending = this.tasks.get(conversationId);
+    if (!pending) return null;
+    if (pending.expiresAt <= this.now()) {
+      this.tasks.delete(conversationId);
+      return null;
+    }
+    if (isCancellation(userMessage)) {
+      this.tasks.delete(conversationId);
+      return null;
+    }
+    if (pending.plan.missingFields?.includes("location")) {
+      const location = locationFromClarification(userMessage);
+      if (!location) {
+        this.tasks.delete(conversationId);
+        return null;
+      }
+      this.tasks.delete(conversationId);
+      return {
+        mode: "external_evidence",
+        requiredCapabilities: [...pending.plan.requiredCapabilities],
+        searchQuery: `${pending.originalMessage}\nUser-provided location: ${location}`,
+        reason: "A pending external-information task was resumed with a user-provided location."
+      };
+    }
+    this.tasks.delete(conversationId);
+    return null;
+  }
+
+  clear(conversationId: string): void {
+    this.tasks.delete(conversationId);
+  }
+}
 
 /** Plans only high-confidence external-evidence requirements; other turns stay on the normal agent path. */
 export function planTask(userMessage: string, memory: ThreadMemorySnapshot): TaskPlan {
@@ -48,6 +109,7 @@ export function planTask(userMessage: string, memory: ThreadMemorySnapshot): Tas
       return {
         mode: "clarify",
         requiredCapabilities: capabilities,
+        searchQuery: text,
         missingFields: ["location"],
         reason: "Current weather information requires a location."
       };
@@ -212,4 +274,18 @@ function claimsSearchUnavailable(reply: string): boolean {
 
 function containsCjk(value: string): boolean {
   return /[\u3400-\u9fff]/u.test(value);
+}
+
+function locationFromClarification(value: string): string {
+  const normalized = value
+    .replace(/^(?:在|用|查|查询|地点是|城市是|location is|in)\s*/iu, "")
+    .replace(/[。.!！]+$/u, "")
+    .trim();
+  if (!normalized || normalized.length > 48 || /[?？]/u.test(normalized)) return "";
+  if (/^(?:天气|气温|预报|weather|forecast|不知道|不清楚|随便|算了|不用了|取消)$/iu.test(normalized)) return "";
+  return /^[\p{L}\p{N}][\p{L}\p{N}\s.'-]{0,47}$/u.test(normalized) ? normalized : "";
+}
+
+function isCancellation(value: string): boolean {
+  return /^(?:算了|不用了|取消|先不查了|never mind|cancel)$/iu.test(value.trim());
 }
