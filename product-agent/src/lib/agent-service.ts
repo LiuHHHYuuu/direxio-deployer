@@ -11,6 +11,10 @@ import type {
   ThreadMemoryStore
 } from "./memory/thread-memory.js";
 import { toAgentMessageEvent, type MessageServerNewMessageEvent } from "./message-server-adapter.js";
+import {
+  createReadOnlyDirexioMcpClient,
+  type ReadOnlyDirexioMcpClient
+} from "./mcp/read-only-direxio-mcp-client.js";
 import { createAgentRuntime } from "./runtime/index.js";
 import type { AgentRuntime } from "./runtime/types.js";
 import {
@@ -30,6 +34,7 @@ export interface AgentServiceOptions {
   runtime?: AgentRuntime;
   memoryStore?: ThreadMemoryStore;
   promptSkillStore?: PromptSkillStore;
+  readOnlyMcpClient?: ReadOnlyDirexioMcpClient;
   env?: NodeJS.ProcessEnv;
   logger?: boolean;
 }
@@ -41,11 +46,24 @@ export function createAgentServiceApp(options: AgentServiceOptions = {}): Fastif
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   const memoryStore = options.memoryStore || createDefaultThreadMemoryStore(env);
   const promptSkillStore = options.promptSkillStore || createDefaultPromptSkillStore(env);
-  const runtime = options.runtime || createAgentRuntime({ fetchImpl, env, memoryStore, promptSkillStore });
+  const readOnlyMcpClient = options.readOnlyMcpClient || (options.runtime
+    ? undefined
+    : createReadOnlyDirexioMcpClient({ env }));
+  const runtime = options.runtime || createAgentRuntime({
+    fetchImpl,
+    env,
+    memoryStore,
+    promptSkillStore,
+    readOnlyMcpClient
+  });
 
   const app = Fastify({
     logger: options.logger ?? false,
     bodyLimit: 1024 * 1024
+  });
+
+  app.addHook("onClose", async () => {
+    await runtime.close?.();
   });
 
   app.setErrorHandler((error, _request, reply) => {
@@ -73,7 +91,7 @@ export function createAgentServiceApp(options: AgentServiceOptions = {}): Fastif
     return reply.status(200).send({
       schema: "direxio.agent_tools.v1",
       title: "Direxio AI tools",
-      items: createAgentToolRegistry({ promptSkillStore }).manifests
+      items: createAgentToolRegistry({ promptSkillStore, readOnlyMcpClient }).manifests
     });
   });
 

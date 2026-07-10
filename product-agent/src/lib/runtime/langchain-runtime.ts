@@ -21,6 +21,7 @@ import {
   type ThreadMemoryStore
 } from "../memory/thread-memory.js";
 import type { CurrentThreadMcpClient } from "../mcp/current-thread-mcp-client.js";
+import type { ReadOnlyDirexioMcpClient } from "../mcp/read-only-direxio-mcp-client.js";
 import { DirexioGatewayChatModel, DirexioGatewayChatModelError } from "../models/direxio-gateway-chat-model.js";
 import type { PromptSkillStore } from "../skills/prompt-skill-store.js";
 import {
@@ -32,7 +33,7 @@ import {
   agentActionResultContentFromText,
   agentActionResultSummaryFromText
 } from "../tools/structured-output.js";
-import type { AgentTool, AgentToolContext } from "../tools/types.js";
+import type { AgentTool, AgentToolContext, AgentToolResult } from "../tools/types.js";
 import type { FetchLike, GatewayMessage } from "../types.js";
 import { flagFromEnv, numberFromEnv } from "./runtime-config.js";
 import { planCardDecision, ProactiveCardGate, type CardDecision } from "./card-planner.js";
@@ -58,6 +59,7 @@ export interface LangChainAgentRuntimeOptions {
   maxModelCalls?: number;
   gatewayTimeoutMs?: number;
   currentThreadMcpClient?: CurrentThreadMcpClient;
+  readOnlyMcpClient?: ReadOnlyDirexioMcpClient;
   promptSkillStore?: PromptSkillStore;
   memoryExtractor?: MemoryCandidateExtractor;
   autoMemoryEnabled?: boolean;
@@ -86,6 +88,7 @@ class LangChainAgentRuntime implements AgentRuntime {
   private readonly memoryStore: ThreadMemoryStore;
   private readonly staticTools?: AgentTool[];
   private readonly currentThreadMcpClient?: CurrentThreadMcpClient;
+  private readonly readOnlyMcpClient?: ReadOnlyDirexioMcpClient;
   private readonly promptSkillStore?: PromptSkillStore;
   private readonly fetchImpl: FetchLike;
   private readonly env: NodeJS.ProcessEnv;
@@ -110,6 +113,7 @@ class LangChainAgentRuntime implements AgentRuntime {
     this.memoryStore = options.memoryStore || new InMemoryThreadMemoryStore();
     this.staticTools = options.tools;
     this.currentThreadMcpClient = options.currentThreadMcpClient;
+    this.readOnlyMcpClient = options.readOnlyMcpClient;
     this.promptSkillStore = options.promptSkillStore;
     this.memoryExtractor = options.memoryExtractor || new GatewayMemoryCandidateExtractor();
     this.fetchImpl = options.fetchImpl || globalThis.fetch;
@@ -168,6 +172,8 @@ class LangChainAgentRuntime implements AgentRuntime {
   async run(options: AgentRuntimeRunOptions): Promise<AgentRuntimeResult> {
     let modelCalls = 0;
     let outboundContent = "";
+    let mcpReadAttempted = false;
+    let mcpReadSucceeded = false;
     this.memoryStore.rememberMessages(options.payload.conversation_id, options.payload.messages);
     const snapshot = this.memoryStore.snapshot(options.payload.conversation_id);
     const effectiveFetch = options.fetchImpl || this.fetchImpl;
@@ -332,6 +338,11 @@ class LangChainAgentRuntime implements AgentRuntime {
         evidenceLedger,
         (content) => {
           outboundContent = content;
+        },
+        (result) => {
+          if (result.dataSensitivity !== "third_party_app_data") return;
+          mcpReadAttempted = true;
+          if (result.ok) mcpReadSucceeded = true;
         }
       )),
       checkpointer: this.checkpointer,
@@ -347,6 +358,11 @@ class LangChainAgentRuntime implements AgentRuntime {
         }
       );
       let rawReply = finalAssistantReply(result);
+      if (mcpReadAttempted && !mcpReadSucceeded) {
+        const reply = "App 数据暂时不可用或未授权，请稍后再试。";
+        this.memoryStore.rememberAssistantReply(options.payload.conversation_id, reply);
+        return { ok: true, reply };
+      }
       if (taskPlan.mode === "external_evidence") {
         let validation = validateCompletion(taskPlan, evidenceLedger, rawReply);
         logRuntimeEvent(this.runtimeLogEnabled, {
@@ -395,12 +411,16 @@ class LangChainAgentRuntime implements AgentRuntime {
           }
         };
       }
+      if (mcpReadSucceeded) {
+        this.memoryStore.markConversationPrivateData?.(options.payload.conversation_id);
+      }
       this.memoryStore.rememberAssistantReply(options.payload.conversation_id, reply);
       await this.rememberAutomatically({
         options,
         reply,
         recentMessages: memory.recentMessages,
-        fetchImpl: effectiveFetch
+        fetchImpl: effectiveFetch,
+        skipForMcpData: mcpReadSucceeded
       });
       return {
         ok: true,
@@ -432,9 +452,14 @@ class LangChainAgentRuntime implements AgentRuntime {
     }
   }
 
+  async close(): Promise<void> {
+    await this.readOnlyMcpClient?.close();
+  }
+
   private toolsForRun(): AgentTool[] {
     return this.staticTools || createAgentToolRegistry({
       currentThreadMcpClient: this.currentThreadMcpClient,
+      readOnlyMcpClient: this.readOnlyMcpClient,
       promptSkillStore: this.promptSkillStore
     }).tools;
   }
@@ -443,14 +468,24 @@ class LangChainAgentRuntime implements AgentRuntime {
     options,
     reply,
     recentMessages,
-    fetchImpl
+    fetchImpl,
+    skipForMcpData
   }: {
     options: AgentRuntimeRunOptions;
     reply: string;
     recentMessages: GatewayMessage[];
     fetchImpl: FetchLike;
+    skipForMcpData: boolean;
   }): Promise<void> {
     if (!this.autoMemoryEnabled) return;
+    if (skipForMcpData) {
+      logRuntimeEvent(this.runtimeLogEnabled, {
+        type: "agent_auto_memory",
+        ok: true,
+        skipped: "third_party_app_data"
+      });
+      return;
+    }
     const startedAt = Date.now();
     try {
       const changes = await runAutomaticMemory({
@@ -634,13 +669,15 @@ function createLangChainTool(
   context: AgentToolContext,
   logEnabled: boolean,
   evidenceLedger: EvidenceLedger,
-  captureStructuredContent: (content: string) => void
+  captureStructuredContent: (content: string) => void,
+  captureResult: (result: AgentToolResult) => void
 ) {
   return tool(
     async (input: unknown) => {
       const startedAt = Date.now();
       try {
         const result = await agentTool.run(asRecord(input), context);
+        captureResult(result);
         evidenceLedger.record(agentTool, result);
         const structuredContent = agentActionResultContentFromText(result.content);
         if (structuredContent) captureStructuredContent(structuredContent);
@@ -693,6 +730,43 @@ function scoreFromEnv(env: NodeJS.ProcessEnv, key: string, fallback: number): nu
 }
 
 function schemaForTool(name: string) {
+  if (name === "list_contacts") {
+    return z.object({
+      query: z.string().min(1).max(200).optional().describe("Optional contact name or identifier to search."),
+      limit: z.number().int().min(1).max(20).optional().describe("Maximum contacts to read.")
+    });
+  }
+  if (name === "search_rooms") {
+    return z.object({
+      query: z.string().min(1).max(200).optional().describe("Optional room, person, group, or channel name."),
+      type: z.enum(["contact", "group", "channel", "all"]).optional().describe("Room category to search."),
+      limit: z.number().int().min(1).max(20).optional().describe("Maximum rooms to read.")
+    });
+  }
+  if (name === "list_messages" || name === "list_channel_posts") {
+    return z.object({
+      room_id: z.string().min(1).max(512).describe("Authorized Direxio room id returned by a room or contact tool."),
+      from_time: z.string().max(64).optional().describe("Optional RFC3339 UTC lower time bound."),
+      to_time: z.string().max(64).optional().describe("Optional RFC3339 UTC upper time bound."),
+      cursor: z.string().max(2048).optional().describe("Optional opaque pagination cursor."),
+      limit: z.number().int().min(1).max(20).optional().describe("Maximum items to read.")
+    });
+  }
+  if (name === "list_room_members") {
+    return z.object({
+      room_id: z.string().min(1).max(512).describe("Authorized Direxio room id."),
+      limit: z.number().int().min(1).max(20).optional().describe("Maximum members to read.")
+    });
+  }
+  if (name === "list_post_comments") {
+    return z.object({
+      post_id: z.string().min(1).max(512).describe("Post id returned by list_channel_posts."),
+      from_time: z.string().max(64).optional().describe("Optional RFC3339 UTC lower time bound."),
+      to_time: z.string().max(64).optional().describe("Optional RFC3339 UTC upper time bound."),
+      cursor: z.string().max(2048).optional().describe("Optional opaque pagination cursor."),
+      limit: z.number().int().min(1).max(20).optional().describe("Maximum comments to read.")
+    });
+  }
   if (name === "list_recent_ai_messages") {
     return z.object({
       limit: z.number().int().min(1).max(20).optional().describe("Maximum number of recent messages to read.")
@@ -797,6 +871,9 @@ function buildSystemPrompt(memory: ThreadMemorySnapshot, taskPlan?: TaskPlan, ev
   return [
     "You are Direxio AI, a helpful AI friend inside a private Direxio conversation.",
     "Use local read-only tools only when they help answer the user. Do not claim access to conversations or contacts unless a tool result provides that data.",
+    "Use Direxio contact, room, message, member, post, and comment tools only when the latest user turn explicitly asks to read that App data. Never read it proactively or because an older turn mentioned it.",
+    "When a person or room name must be resolved, call list_contacts or search_rooms before reading messages. Never invent a room_id or post_id.",
+    "MCP App-data tools are read-only. Do not ask to send messages, create comments, or expose raw tool JSON in the answer.",
     "For weather, news, recent facts, prices, or anything time-sensitive, call web_search before answering.",
     "If the user asks to generate a status card, mood card, memory capsule, recap card, persona card, or interaction style card, call the matching card tool.",
     "Card tools already include approved thread memory. Do not call memory_save for a generated card unless the user explicitly asks to remember or save it.",

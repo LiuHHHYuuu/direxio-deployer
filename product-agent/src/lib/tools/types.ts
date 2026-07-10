@@ -13,12 +13,16 @@ export interface AgentToolResult {
   ok: boolean;
   content: string;
   sources?: string[];
+  dataSensitivity?: "third_party_app_data";
 }
 
 export type AgentToolPermissionScope =
   | "current_ai_thread"
   | "thread_memory"
   | "contacts"
+  | "rooms"
+  | "messages"
+  | "channel_content"
   | "public_web"
   | "explicit_selected_context";
 
@@ -33,7 +37,7 @@ export interface AgentToolManifest {
   name: string;
   title: string;
   description: string;
-  category: "thread" | "memory" | "contacts" | "web" | "experience";
+  category: "thread" | "memory" | "contacts" | "rooms" | "channels" | "web" | "experience";
   source?: "official" | "user" | "mcp" | "developer";
   skillKind?: "built_in" | "prompt" | "mcp" | "http";
   defaultEnabled: boolean;

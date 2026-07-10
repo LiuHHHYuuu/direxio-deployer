@@ -415,10 +415,22 @@ The same config shape may be included on `/v1/message-server/new-message` as
 turn, so a freshly uploaded Prompt Skill can trigger without a separate manual
 upload call. Non-prompt developer skill entries are skipped.
 
-The tools do not read private human chats by default. Broader message search
-should be added through MCP or message-server APIs with explicit policy checks.
-The first MCP hook is only a current-thread client interface and test fake; the
-default runtime does not connect to a real MCP server yet.
+The tools do not read private human chats by default. When read-only MCP is
+explicitly enabled, product-agent starts the published `dirextalk-mcp` server
+over stdio and exposes a fixed allowlist: contacts, rooms, messages, members,
+channel posts, and post comments. The latest user turn must explicitly request
+the matching App data before the local policy permits a call. Product-agent
+never dynamically imports the MCP server's write tools.
+
+MCP evidence is reduced before it is sent through the hosted AI gateway. Raw
+MCP JSON is not emitted as an App message, and MCP-derived third-party facts do
+not enter automatic canonical memory. After a conversation uses MCP App data,
+context overflow is trimmed instead of persisted as a `thread_summary`, so an
+old MCP answer cannot later enter the vector memory index through compression.
+Because the current Agent token also
+authorizes Message Server command actions, this client allowlist protects the
+model-facing surface but is not a server-side least-privilege credential. A
+future Message Server change should issue a query-only scoped token.
 
 LangChain tool calling requires the hosted `ai-gateway` model provider path to
 support OpenAI-compatible `tools` and `tool_calls`. The deterministic echo
@@ -453,6 +465,14 @@ Runtime safety controls:
 - `DIREXIO_AGENT_RUNTIME_LOG=1`: writes lightweight runtime events such as
   model call count, tool name, duration, and status. It does not log message
   content.
+- `DIREXIO_AGENT_MCP_READ_ONLY=1`: enables the fixed read-only MCP tool set.
+  It defaults to `0` and is fail-closed when domain or Agent token is missing.
+- `DIREXIO_AGENT_MCP_DOMAIN`: Message Server origin used by the MCP child. In
+  Docker this is normally `http://message-server:8008`.
+- `DIREXIO_AGENT_TOKEN` and `DIREXIO_AGENT_ROOM_ID`: protected node values used
+  only by the server-side MCP child. They must never be sent to the App or AI
+  gateway.
+- `DIREXIO_AGENT_MCP_TIMEOUT_MS`: per-call MCP timeout, default `8000`.
 
 ## Dev Integration Server
 
@@ -503,6 +523,11 @@ DIREXIO_PRODUCT_AGENT_URL=http://product-agent:8797
 DIREXIO_AGENT_DATA_DIR=/var/lib/direxio-product-agent
 DIREXIO_AGENT_RUNTIME=langchain
 DIREXIO_AGENT_WEB_SEARCH=1
+DIREXIO_AGENT_MCP_READ_ONLY=0
+DIREXIO_AGENT_MCP_DOMAIN=http://message-server:8008
+DIREXIO_AGENT_TOKEN=
+DIREXIO_AGENT_ROOM_ID=
+DIREXIO_AGENT_MCP_TIMEOUT_MS=8000
 DIREXIO_AGENT_TASK_CONTROL=1
 DIREXIO_AGENT_PENDING_TASK_TTL_MINUTES=10
 DIREXIO_AGENT_DYNAMIC_CARDS=1

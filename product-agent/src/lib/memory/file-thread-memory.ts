@@ -38,6 +38,7 @@ export interface FileBackedThreadMemoryStoreOptions {
 interface MemoryFileDocument {
   schema: typeof MEMORY_FILE_SCHEMA;
   items: AgentMemoryItem[];
+  private_conversations: string[];
 }
 
 /**
@@ -146,6 +147,21 @@ export class FileBackedThreadMemoryStore implements ThreadMemoryStore {
   rememberAssistantReply(conversationId: string, reply: string): void {
     this.recentStore.rememberAssistantReply(conversationId, reply);
     this.compactOrTrimRecentMessages(conversationId);
+  }
+
+  markConversationPrivateData(conversationId: string): void {
+    const normalized = conversationId.trim();
+    if (!normalized) return;
+    const document = this.readDocument();
+    const alreadyMarked = document.private_conversations.includes(normalized);
+    const filteredItems = document.items.filter((item) =>
+      item.type !== "thread_summary" || item.conversationId !== normalized
+    );
+    if (!alreadyMarked) document.private_conversations.push(normalized);
+    const removedSummary = filteredItems.length !== document.items.length;
+    document.items = filteredItems;
+    if (!alreadyMarked || removedSummary) this.writeDocument(document);
+    this.recentStore.markConversationPrivateData(normalized);
   }
 
   /**
@@ -261,6 +277,11 @@ export class FileBackedThreadMemoryStore implements ThreadMemoryStore {
   }
 
   private compactOrTrimRecentMessages(conversationId: string): void {
+    if (this.readDocument().private_conversations.includes(conversationId)) {
+      this.recentStore.markConversationPrivateData(conversationId);
+      this.recentStore.trimRecentMessages(conversationId);
+      return;
+    }
     if (!this.autoCompact) {
       this.recentStore.trimRecentMessages(conversationId);
       return;
@@ -289,7 +310,7 @@ export class FileBackedThreadMemoryStore implements ThreadMemoryStore {
 
   private readDocument(): MemoryFileDocument {
     if (!existsSync(this.filePath)) {
-      return { schema: MEMORY_FILE_SCHEMA, items: [] };
+      return { schema: MEMORY_FILE_SCHEMA, items: [], private_conversations: [] };
     }
     const raw = readFileSync(this.filePath, "utf8");
     const parsed = JSON.parse(raw) as unknown;
@@ -297,7 +318,10 @@ export class FileBackedThreadMemoryStore implements ThreadMemoryStore {
     const items = Array.isArray(record.items)
       ? record.items.map(normalizeMemoryItem).filter((item): item is AgentMemoryItem => Boolean(item))
       : [];
-    return { schema: MEMORY_FILE_SCHEMA, items };
+    const privateConversations = Array.isArray(record.private_conversations)
+      ? record.private_conversations.filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
+      : [];
+    return { schema: MEMORY_FILE_SCHEMA, items, private_conversations: [...new Set(privateConversations)] };
   }
 
   private writeDocument(document: MemoryFileDocument): void {
@@ -305,7 +329,8 @@ export class FileBackedThreadMemoryStore implements ThreadMemoryStore {
     const tmpPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
     const body = `${JSON.stringify({
       schema: MEMORY_FILE_SCHEMA,
-      items: document.items
+      items: document.items,
+      private_conversations: document.private_conversations
     }, null, 2)}\n`;
     writeFileSync(tmpPath, body, "utf8");
     renameSync(tmpPath, this.filePath);

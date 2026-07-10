@@ -1,5 +1,6 @@
 import type { ThreadMemorySnapshot } from "../memory/thread-memory.js";
 import type { AgentTool, AgentToolResult } from "../tools/types.js";
+import { textExplicitlyRequestsPrivateAppData } from "../tools/mcp-read-policy.js";
 
 export type TaskPlanMode = "direct" | "external_evidence" | "clarify";
 
@@ -92,6 +93,13 @@ export class PendingTaskStore {
 /** Plans only high-confidence external-evidence requirements; other turns stay on the normal agent path. */
 export function planTask(userMessage: string, memory: ThreadMemorySnapshot): TaskPlan {
   const text = userMessage.trim();
+  if (text && !explicitPublicWebRequest(text) && textExplicitlyRequestsPrivateAppData(text)) {
+    return {
+      mode: "direct",
+      requiredCapabilities: [],
+      reason: "The request targets private App data and should be handled by local MCP tools."
+    };
+  }
   if (!text || !requiresExternalEvidence(text)) {
     return {
       mode: "direct",

@@ -5,6 +5,7 @@ import {
   type ThreadMemoryStore
 } from "../memory/thread-memory.js";
 import type { CurrentThreadMcpClient } from "../mcp/current-thread-mcp-client.js";
+import type { ReadOnlyDirexioMcpClient } from "../mcp/read-only-direxio-mcp-client.js";
 import type { PromptSkillStore } from "../skills/prompt-skill-store.js";
 import { callHostedGateway } from "../hosted-gateway-client.js";
 import { createAgentToolRegistry } from "../tools/registry.js";
@@ -25,6 +26,7 @@ export interface LocalAgentRuntimeOptions {
   fetchImpl?: FetchLike;
   env?: NodeJS.ProcessEnv;
   currentThreadMcpClient?: CurrentThreadMcpClient;
+  readOnlyMcpClient?: ReadOnlyDirexioMcpClient;
   promptSkillStore?: PromptSkillStore;
 }
 
@@ -58,6 +60,9 @@ export function createLocalAgentRuntime(options: LocalAgentRuntimeOptions = {}):
   });
 
   return {
+    async close() {
+      await options.readOnlyMcpClient?.close();
+    },
     async run(options: AgentRuntimeRunOptions) {
       const prepared = await this.preparePayload({
         event: options.event,
@@ -109,6 +114,7 @@ export function createLocalAgentRuntime(options: LocalAgentRuntimeOptions = {}):
       const memory = withRelevantMemories(snapshot, relevantMemories);
       const tools = options.tools || createAgentToolRegistry({
         currentThreadMcpClient: options.currentThreadMcpClient,
+        readOnlyMcpClient: options.readOnlyMcpClient,
         promptSkillStore: options.promptSkillStore
       }).tools;
       const toolResults = await runSelectedAgentTools({
@@ -122,6 +128,9 @@ export function createLocalAgentRuntime(options: LocalAgentRuntimeOptions = {}):
         gatewayUrl,
         aiToken
       });
+      if (toolResults.some((result) => result.ok && result.dataSensitivity === "third_party_app_data")) {
+        memoryStore.markConversationPrivateData?.(payload.conversation_id);
+      }
       const outboundContent = agentActionResultContentFromToolResults(toolResults);
 
       const contextMessages = [

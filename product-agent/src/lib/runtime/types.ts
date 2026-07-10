@@ -17,4 +17,5 @@ export type AgentRuntimeResult = HostedGatewayResult | {
 
 export interface AgentRuntime {
   run(options: AgentRuntimeRunOptions): Promise<AgentRuntimeResult>;
+  close?(): Promise<void>;
 }

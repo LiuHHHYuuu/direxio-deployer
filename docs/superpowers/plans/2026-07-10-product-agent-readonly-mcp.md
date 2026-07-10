@@ -14,13 +14,29 @@ reads, raw MCP JSON replies, and canonical memory capture of third-party data.
 | Loop | Status | Deliverable | Eval |
 | --- | --- | --- | --- |
 | 0 | Done | Approved design and implementation plan | Spec self-review |
-| 1 | Pending | Typed read-only MCP client and fixed allowlist | Focused client contract tests |
-| 2 | Pending | Six Product Agent MCP tool adapters and intent policy | Focused tool contract tests |
-| 3 | Pending | LangChain runtime wiring and one-reply behavior | Agent loop contract tests |
-| 4 | Pending | MCP-to-memory isolation | Automatic-memory regression tests |
-| 5 | Pending | Product Agent image/config wiring and docs | Render/config checks |
-| 6 | Pending | Full local and container verification | Check, test, build, container smoke |
+| 1 | Done | Typed read-only MCP client and fixed allowlist | Focused client contract tests |
+| 2 | Done | Six Product Agent MCP tool adapters and intent policy | Focused tool contract tests |
+| 3 | Done | LangChain runtime wiring and one-reply behavior | Agent loop contract tests |
+| 4 | Done | MCP-to-memory isolation | Automatic-memory and compression regression tests |
+| 5 | Done | Product Agent image/config wiring and docs | Render/config checks |
+| 6 | Done | Full local and container verification | Check, test, build, container smoke |
 | 7 | Pending | `codex1` deployment and redacted live probe | Counts/status only |
+
+Local loop evidence:
+
+- The published `dirextalk-mcp@0.1.9` process completed a real stdio call to an
+  isolated fake Message Server on Windows and inside the production Alpine
+  container image.
+- Read-only policy tests reject write names before transport, require matching
+  latest-turn intent, cap limits, and suppress raw protocol JSON.
+- LangChain tests cover contacts, channel resolution followed by post reading,
+  one final outbound reply, failure anti-fabrication, and skipped automatic
+  memory extraction.
+- In-memory and file-backed stores remove existing compressed summaries and
+  persist a no-auto-compression marker after MCP App data is used.
+- `npm run check`, `npm test`, `npm run build`, `npm run smoke:container`,
+  rendered Compose checks, `docker compose config --quiet`, and
+  `git diff --check` pass.
 
 ## Loop 1: MCP Client
 

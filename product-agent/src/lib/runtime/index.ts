@@ -2,6 +2,7 @@ import type { FetchLike } from "../types.js";
 import type { ThreadMemoryStore } from "../memory/thread-memory.js";
 import { createDefaultThreadMemoryStore } from "../memory/store-factory.js";
 import type { PromptSkillStore } from "../skills/prompt-skill-store.js";
+import type { ReadOnlyDirexioMcpClient } from "../mcp/read-only-direxio-mcp-client.js";
 import { createLangChainAgentRuntime } from "./langchain-runtime.js";
 import { createLocalAgentRuntime } from "./local-agent-runtime.js";
 import type { AgentRuntime } from "./types.js";
@@ -11,6 +12,7 @@ export interface CreateAgentRuntimeOptions {
   env?: NodeJS.ProcessEnv;
   memoryStore?: ThreadMemoryStore;
   promptSkillStore?: PromptSkillStore;
+  readOnlyMcpClient?: ReadOnlyDirexioMcpClient;
 }
 
 export function createAgentRuntime(options: CreateAgentRuntimeOptions = {}): AgentRuntime {
@@ -21,13 +23,15 @@ export function createAgentRuntime(options: CreateAgentRuntimeOptions = {}): Age
       fetchImpl: options.fetchImpl,
       env,
       memoryStore,
-      promptSkillStore: options.promptSkillStore
+      promptSkillStore: options.promptSkillStore,
+      readOnlyMcpClient: options.readOnlyMcpClient
     });
   }
   return createLangChainAgentRuntime({
     fetchImpl: options.fetchImpl,
     env,
     memoryStore,
-    promptSkillStore: options.promptSkillStore
+    promptSkillStore: options.promptSkillStore,
+    readOnlyMcpClient: options.readOnlyMcpClient
   });
 }

@@ -39,9 +39,18 @@ grep -q 'DIREXIO_AI_TOKEN: ${DIREXIO_AI_TOKEN:-}' "$tmp/bundle/docker-compose.ym
 grep -q 'product-agent-data:' "$tmp/bundle/docker-compose.yml"
 grep -q 'DIREXIO_AGENT_DATA_DIR: /var/lib/direxio-product-agent' "$tmp/bundle/docker-compose.yml"
 grep -q 'product-agent-data:/var/lib/direxio-product-agent' "$tmp/bundle/docker-compose.yml"
+grep -q 'DIREXIO_AGENT_MCP_READ_ONLY: ${DIREXIO_AGENT_MCP_READ_ONLY:-0}' "$tmp/bundle/docker-compose.yml"
+grep -q 'DIREXIO_AGENT_MCP_DOMAIN: ${DIREXIO_AGENT_MCP_DOMAIN:-http://message-server:8008}' "$tmp/bundle/docker-compose.yml"
+grep -q 'DIREXIO_AGENT_TOKEN: ${DIREXIO_AGENT_TOKEN:-}' "$tmp/bundle/docker-compose.yml"
+grep -q 'DIREXIO_AGENT_ROOM_ID: ${DIREXIO_AGENT_ROOM_ID:-}' "$tmp/bundle/docker-compose.yml"
+grep -q 'DIREXIO_AGENT_MCP_TIMEOUT_MS: ${DIREXIO_AGENT_MCP_TIMEOUT_MS:-8000}' "$tmp/bundle/docker-compose.yml"
 
 if grep -q '^      DIREXIO_AI_TOKEN=' "$tmp/user-data.yaml"; then
   echo "rendered user-data must not write hosted AI tokens into /opt/p2p/.env by default" >&2
+  exit 1
+fi
+if grep -q '^      DIREXIO_AGENT_TOKEN=' "$tmp/user-data.yaml"; then
+  echo "rendered user-data must not write Agent tokens into /opt/p2p/.env by default" >&2
   exit 1
 fi
 

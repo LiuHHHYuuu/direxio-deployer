@@ -1,12 +1,15 @@
 import type { CurrentThreadMcpClient } from "../mcp/current-thread-mcp-client.js";
+import type { ReadOnlyDirexioMcpClient } from "../mcp/read-only-direxio-mcp-client.js";
 import { callHostedSearch } from "../hosted-search-client.js";
 import type { GatewayMessage } from "../types.js";
 import { createAgentExperienceTools } from "./agent-experience-tools.js";
 import { createMcpCurrentThreadTool } from "./mcp-current-thread-tool.js";
+import { createMcpReadTools } from "./mcp-read-tools.js";
 import type { AgentTool, AgentToolContext, AgentToolManifest, AgentToolResult } from "./types.js";
 
 export interface DirexioReadOnlyToolsOptions {
   currentThreadMcpClient?: CurrentThreadMcpClient;
+  readOnlyMcpClient?: ReadOnlyDirexioMcpClient;
 }
 
 export function createDirexioReadOnlyTools(options: DirexioReadOnlyToolsOptions = {}): AgentTool[] {
@@ -61,24 +64,9 @@ export function createDirexioReadOnlyTools(options: DirexioReadOnlyToolsOptions 
         );
       }
     },
-    {
-      name: "list_contacts",
-      description: "Read contacts only when message-server includes contact data in the agent event.",
-      manifest: manifest({
-        name: "list_contacts",
-        title: "联系人",
-        description: "仅在服务端明确传入联系人数据时读取。",
-        category: "contacts",
-        permissions: [{ scope: "contacts", access: "read", required: true }]
-      }),
-      run: async (_input, context) => {
-        const contacts = Array.isArray(context.event.contacts) ? context.event.contacts : [];
-        return ok(
-          "list_contacts",
-          contacts.length ? JSON.stringify(contacts) : "No contact data was provided to product-agent."
-        );
-      }
-    },
+    ...(options.readOnlyMcpClient?.isConfigured()
+      ? createMcpReadTools(options.readOnlyMcpClient)
+      : [createEventContactsTool()]),
     {
       name: "web_search",
       description: "Search the public web for current, external information when it helps answer the user.",
@@ -97,6 +85,27 @@ export function createDirexioReadOnlyTools(options: DirexioReadOnlyToolsOptions 
     ...createAgentExperienceTools(),
     createMcpCurrentThreadTool({ client: options.currentThreadMcpClient })
   ];
+}
+
+function createEventContactsTool(): AgentTool {
+  return {
+    name: "list_contacts",
+    description: "Read contacts only when message-server includes contact data in the agent event.",
+    manifest: manifest({
+      name: "list_contacts",
+      title: "联系人",
+      description: "仅在服务端明确传入联系人数据时读取。",
+      category: "contacts",
+      permissions: [{ scope: "contacts", access: "read", required: true }]
+    }),
+    run: async (_input, context) => {
+      const contacts = Array.isArray(context.event.contacts) ? context.event.contacts : [];
+      return ok(
+        "list_contacts",
+        contacts.length ? JSON.stringify(contacts) : "No contact data was provided to product-agent."
+      );
+    }
+  };
 }
 
 function recentMessages(context: AgentToolContext, limit: number): GatewayMessage[] {

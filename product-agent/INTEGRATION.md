@@ -197,11 +197,21 @@ there is no separate direct-card shortcut. The result should stay compact: one
 title, one summary, up to three points, and one short next action. Long
 explanations should be opt-in, not the default action-button response.
 
-The MCP current-thread search hook keeps the same boundary. Its client receives
-only `nodeId`, `conversationId`, `query`, and `limit`, and it is disabled unless
-`DIREXIO_AGENT_MCP_CURRENT_THREAD=1` plus a runtime-injected client are both
-present. It is a skeleton for wiring the existing MCP surface later, not a
-global message reader.
+The production read-only MCP path starts `dirextalk-mcp` over stdio inside the
+Product Agent container. It calls the Message Server's existing P2P query
+actions through the internal Docker origin. Product-agent exposes only
+`list_contacts`, `search_rooms`, `list_messages`, `list_room_members`,
+`list_channel_posts`, and `list_post_comments`; write tools are not registered.
+Each call also requires matching intent in the latest user turn, and MCP-backed
+third-party facts skip automatic canonical-memory extraction. Conversations
+that use MCP App data trim context overflow instead of persisting automatic
+`thread_summary` memories.
+
+The hosted model receives the minimum MCP evidence required to answer the
+explicit request. Operators must treat `DIREXIO_AGENT_MCP_READ_ONLY=1` as
+enabling this hosted processing path. The current Agent token is broader than
+read-only, so a future Message Server-issued query-scoped token remains the
+long-term least-privilege design.
 
 Thread memory has two layers:
 
@@ -239,6 +249,11 @@ DIREXIO_AI_GATEWAY_URL=https://ai.direxio.com
 DIREXIO_PRODUCT_AGENT_URL=http://product-agent:8797
 DIREXIO_AGENT_RUNTIME=langchain
 DIREXIO_AGENT_WEB_SEARCH=1
+DIREXIO_AGENT_MCP_READ_ONLY=0
+DIREXIO_AGENT_MCP_DOMAIN=http://message-server:8008
+DIREXIO_AGENT_TOKEN=
+DIREXIO_AGENT_ROOM_ID=
+DIREXIO_AGENT_MCP_TIMEOUT_MS=8000
 DIREXIO_AGENT_TASK_CONTROL=1
 DIREXIO_AGENT_PENDING_TASK_TTL_MINUTES=10
 DIREXIO_AGENT_DYNAMIC_CARDS=1

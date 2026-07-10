@@ -45,6 +45,7 @@ export interface ThreadMemorySnapshot {
 export interface ThreadMemoryStore {
   rememberMessages(conversationId: string, messages: GatewayMessage[]): void;
   rememberAssistantReply(conversationId: string, reply: string): void;
+  markConversationPrivateData?(conversationId: string): void;
   snapshot(conversationId: string): ThreadMemorySnapshot;
   listMemories(conversationId: string): AgentMemoryItem[];
   searchMemories(conversationId: string, input: ThreadMemorySearchInput): Promise<AgentMemoryItem[]>;
@@ -83,6 +84,7 @@ export interface InMemoryThreadMemoryStoreOptions {
 export class InMemoryThreadMemoryStore implements ThreadMemoryStore {
   private readonly threads = new Map<string, ThreadMemoryState>();
   private readonly ownerMemories: AgentMemoryItem[] = [];
+  private readonly privateDataConversations = new Set<string>();
   private readonly compressionChunkMessages: number;
   private readonly autoCompact: boolean;
   private readonly trimWhenOverLimit: boolean;
@@ -125,6 +127,14 @@ export class InMemoryThreadMemoryStore implements ThreadMemoryStore {
     const state = this.stateFor(conversationId);
     state.recentMessages.push({ role: "assistant", content: reply.trim() });
     this.compactOrTrim(conversationId);
+  }
+
+  markConversationPrivateData(conversationId: string): void {
+    if (!conversationId.trim()) return;
+    this.privateDataConversations.add(conversationId);
+    const state = this.stateFor(conversationId);
+    state.persistentMemories = state.persistentMemories.filter((item) => item.type !== "thread_summary");
+    this.trimRecentMessages(conversationId);
   }
 
   snapshot(conversationId: string): ThreadMemorySnapshot {
@@ -206,6 +216,10 @@ export class InMemoryThreadMemoryStore implements ThreadMemoryStore {
   }
 
   private compactOrTrim(conversationId: string): void {
+    if (this.privateDataConversations.has(conversationId)) {
+      this.trimRecentMessages(conversationId);
+      return;
+    }
     if (this.autoCompact) {
       this.compactRecentMessages(conversationId);
       return;
